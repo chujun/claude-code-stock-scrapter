@@ -2743,8 +2743,8 @@ print('网络异常验证通过')
 ```
 
 **验证标准**：
-- [ ] 限流器正常工作
-- [ ] 请求间隔符合预期
+- [x] 限流器正常工作
+- [x] 请求间隔符合预期
 
 ---
 
@@ -2956,8 +2956,8 @@ print(f'DailyIndex模型验证: {idx.index_code} {idx.close}')
 ```
 
 **验证标准**：
-- [ ] DailyIndex模型可实例化
-- [ ] 字段正确
+- [x] DailyIndex模型可实例化
+- [x] 字段正确
 
 **备注**：标记为后续实现
 
@@ -2988,8 +2988,8 @@ result = asyncio.run(test())
 ```
 
 **验证标准**：
-- [ ] get_index方法存在
-- [ ] 返回数据正确
+- [x] get_index方法存在
+- [x] 返回数据正确
 
 **备注**：标记为后续实现
 
@@ -3021,8 +3021,8 @@ print(f'StockSplit模型验证: {split.stock_code} {split.event_type}')
 ```
 
 **验证标准**：
-- [ ] StockSplit模型可实例化
-- [ ] 字段正确
+- [x] StockSplit模型可实例化
+- [x] 字段正确
 
 **备注**：标记为后续实现
 
