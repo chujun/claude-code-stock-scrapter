@@ -5,7 +5,8 @@ import asyncio
 from datetime import date, datetime
 from typing import List, Optional
 
-import aiohttp
+import akshare as ak
+import pandas as pd
 
 from data_source.base import BaseDataSource
 from data_source.exceptions import (
@@ -25,7 +26,10 @@ from config.settings import get_settings
 
 
 class AkshareClient(BaseDataSource):
-    """akshare数据源实现"""
+    """akshare数据源实现
+
+    使用akshare库获取A股数据
+    """
 
     def __init__(self, settings=None):
         """初始化akshare客户端
@@ -37,60 +41,17 @@ class AkshareClient(BaseDataSource):
         self.rate_limiter = RateLimiter(
             base_interval=self.settings.rate_limit.base_interval
         )
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """获取或创建HTTP会话"""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
 
     async def close(self) -> None:
-        """关闭HTTP会话"""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """关闭客户端"""
+        pass  # akshare不需要关闭连接
 
-    async def _request(
-        self,
-        url: str,
-        params: dict = None,
-        method: str = "GET"
-    ) -> dict:
-        """发送HTTP请求
-
-        Args:
-            url: 请求URL
-            params: 请求参数
-            method: 请求方法
-
-        Returns:
-            dict: 响应数据
-        """
-        await self.rate_limiter.wait()
-        session = await self._get_session()
-
-        try:
-            async with session.request(
-                method,
-                url,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                elif response.status == 429:
-                    raise RateLimitError("API rate limit exceeded")
-                elif response.status >= 500:
-                    raise ServerError(f"Server error: {response.status}")
-                else:
-                    raise NetworkError(
-                        f"Request failed with status {response.status}",
-                        error_code=str(response.status)
-                    )
-        except asyncio.TimeoutError:
-            raise TimeoutError("Request timeout")
-        except aiohttp.ClientError as e:
-            raise NetworkError(f"Client error: {str(e)}")
+    def _run_sync(self, func, *args, **kwargs):
+        """在线程池中运行同步函数"""
+        loop = asyncio.get_event_loop()
+        return loop.run_in_executor(
+            None, lambda: func(*args, **kwargs)
+        )
 
     async def get_stock_list(self) -> List[StockInfo]:
         """获取A股所有股票列表
@@ -103,29 +64,25 @@ class AkshareClient(BaseDataSource):
             DataError: 数据解析失败
         """
         try:
-            url = "http://api.avic.com.cn/stock/list"
-            params = {"market": "sh"}
-            data = await self._request(url, params)
+            await self.rate_limiter.wait()
+
+            # 使用akshare获取股票列表
+            df = await self._run_sync(ak.stock_info_a_code_name)
 
             stocks = []
-            for item in data.get("data", []):
+            for _, row in df.iterrows():
                 stock = StockInfo(
-                    stock_code=item.get("code", ""),
-                    stock_name=item.get("name", ""),
-                    market="SSE" if item.get("code", "").startswith(("6", "9")) else "SZSE",
+                    stock_code=str(row['code']),
+                    stock_name=str(row['name']),
+                    market="SSE" if str(row['code']).startswith(("6", "9")) else "SZSE",
                     status="active"
                 )
                 stocks.append(stock)
 
             return stocks
-        except NetworkError:
-            # 网络错误向上传播，不包装
+        except BusinessError:
             raise
-        except (KeyError, ValueError, TypeError) as e:
-            # 数据解析错误，标记为 DataError
-            raise DataError(f"Failed to parse stock list data: {str(e)}")
         except Exception as e:
-            # 其他错误包装为 NetworkError（可重试）
             raise NetworkError(f"Failed to get stock list: {str(e)}")
 
     async def get_daily(
@@ -160,45 +117,68 @@ class AkshareClient(BaseDataSource):
             )
 
         try:
-            url = f"http://api.avic.com.cn/stock/daily"
-            params = {
-                "code": stock_code,
-                "start_date": start_date.strftime("%Y%m%d"),
-                "end_date": end_date.strftime("%Y%m%d"),
-                "adjust": adjust_type
-            }
-            data = await self._request(url, params)
+            await self.rate_limiter.wait()
+
+            # akshare的adjust参数映射
+            adjust_map = {"qfq": "qfq", "hfq": "hfq", "none": ""}
+            ak_adjust = adjust_map.get(adjust_type, "qfq")
+
+            # 使用腾讯数据源获取日线数据 (eastmoney被代理屏蔽)
+            # 腾讯接口需要带市场前缀
+            symbol_with_prefix = f"sh{stock_code}" if stock_code.startswith(("6", "9")) else f"sz{stock_code}"
+            df = await self._run_sync(
+                ak.stock_zh_a_hist_tx,
+                symbol=symbol_with_prefix,
+                start_date=start_date.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d"),
+                adjust=ak_adjust
+            )
+
+            if df is None or df.empty:
+                return []
 
             daily_list = []
-            for item in data.get("data", []):
+            for _, row in df.iterrows():
+                # 处理日期 (腾讯数据源使用 'date')
+                trade_date = row.get('date')
+                if isinstance(trade_date, str):
+                    trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+                elif hasattr(trade_date, 'date'):
+                    trade_date = trade_date.date()
+
+                # 计算涨跌幅 (腾讯数据源不直接提供，通过前后收盘价计算)
+                close = float(row.get('close', 0))
+                open_price = float(row.get('open', 0))
+                if len(daily_list) > 0:
+                    pre_close = daily_list[-1].close
+                    change_pct = (close - pre_close) / pre_close * 100 if pre_close != 0 else 0
+                else:
+                    pre_close = close
+                    change_pct = 0
+
                 daily = StockDaily(
                     stock_code=stock_code,
-                    trade_date=datetime.strptime(item.get("date", ""), "%Y-%m-%d").date(),
-                    open=float(item.get("open", 0)),
-                    high=float(item.get("high", 0)),
-                    low=float(item.get("low", 0)),
-                    close=float(item.get("close", 0)),
-                    volume=int(item.get("volume", 0)),
-                    turnover=float(item.get("turnover", 0)),
-                    change_pct=float(item.get("change_pct", 0)),
-                    pre_close=float(item.get("pre_close", 0)),
-                    amplitude_pct=float(item.get("amplitude", 0)),
-                    turnover_rate=float(item.get("turnover_rate", 0)),
-                    data_source="akshare",
+                    trade_date=trade_date,
+                    open=open_price,
+                    high=float(row.get('high', 0)),
+                    low=float(row.get('low', 0)),
+                    close=close,
+                    volume=0,  # 腾讯数据源不提供成交量
+                    turnover=float(row.get('amount', 0)) if pd.notna(row.get('amount')) else 0,
+                    change_pct=change_pct,
+                    pre_close=pre_close,
+                    amplitude_pct=0,  # 腾讯数据源不提供振幅
+                    turnover_rate=0,  # 腾讯数据源不提供换手率
+                    data_source="akshare_tx",
                     adjust_type=adjust_type,
                     is_adjusted=(adjust_type != "none")
                 )
                 daily_list.append(daily)
 
             return daily_list
-        except NetworkError:
-            # 网络错误向上传播，不包装
+        except BusinessError:
             raise
-        except (KeyError, ValueError, TypeError) as e:
-            # 数据解析错误，应该被标记为 DataError
-            raise DataError(f"Failed to parse daily data for {stock_code}: {str(e)}")
         except Exception as e:
-            # 其他错误包装为 NetworkError（可重试）
             raise NetworkError(f"Failed to get daily data for {stock_code}: {str(e)}")
 
     async def get_index(
@@ -222,14 +202,27 @@ class AkshareClient(BaseDataSource):
             DataError: 数据解析失败
         """
         try:
-            url = f"http://api.avic.com.cn/index/daily"
-            params = {
-                "code": index_code,
-                "start_date": start_date.strftime("%Y%m%d"),
-                "end_date": end_date.strftime("%Y%m%d")
-            }
-            data = await self._request(url, params)
+            await self.rate_limiter.wait()
 
+            # 指数代码映射到akshare格式
+            index_map = {
+                "000001": "sh000001",  # 上证指数
+                "399001": "sz399001",  # 深证成指
+                "399006": "sz399006",  # 创业板指
+            }
+
+            symbol = index_map.get(index_code, index_code)
+
+            # 使用akshare获取指数数据
+            df = await self._run_sync(
+                ak.stock_zh_index_daily,
+                symbol=symbol
+            )
+
+            if df is None or df.empty:
+                return []
+
+            # 过滤日期范围
             index_list = []
             index_name_map = {
                 "000001": "上证指数",
@@ -237,31 +230,40 @@ class AkshareClient(BaseDataSource):
                 "399006": "创业板指"
             }
 
-            for item in data.get("data", []):
+            for _, row in df.iterrows():
+                trade_date = row['date']
+                if isinstance(trade_date, str):
+                    trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+
+                # 过滤日期范围
+                if trade_date < start_date or trade_date > end_date:
+                    continue
+
+                # 计算涨跌幅 (需要前一天的收盘价)
+                close = float(row.get('close', 0))
+                if len(index_list) > 0:
+                    pre_close = index_list[-1].close
+                    change_pct = (close - pre_close) / pre_close * 100 if pre_close != 0 else 0
+                else:
+                    change_pct = 0
+
                 index = DailyIndex(
                     index_code=index_code,
                     index_name=index_name_map.get(index_code, index_code),
-                    trade_date=datetime.strptime(item.get("date", ""), "%Y-%m-%d").date(),
-                    open=float(item.get("open", 0)),
-                    high=float(item.get("high", 0)),
-                    low=float(item.get("low", 0)),
-                    close=float(item.get("close", 0)),
-                    volume=int(item.get("volume", 0)),
-                    turnover=float(item.get("turnover", 0)),
-                    change_pct=float(item.get("change_pct", 0)),
+                    trade_date=trade_date,
+                    open=float(row.get('open', 0)),
+                    high=float(row.get('high', 0)),
+                    low=float(row.get('low', 0)),
+                    close=close,
+                    volume=int(row.get('volume', 0)),
+                    turnover=0,  # stock_zh_index_daily不提供
+                    change_pct=change_pct,
                     data_source="akshare"
                 )
                 index_list.append(index)
 
             return index_list
-        except NetworkError:
-            # 网络错误向上传播，不包装
-            raise
-        except (KeyError, ValueError, TypeError) as e:
-            # 数据解析错误，标记为 DataError
-            raise DataError(f"Failed to parse index data for {index_code}: {str(e)}")
         except Exception as e:
-            # 其他错误包装为 NetworkError（可重试）
             raise NetworkError(f"Failed to get index data for {index_code}: {str(e)}")
 
     async def health_check(self) -> bool:
@@ -271,8 +273,13 @@ class AkshareClient(BaseDataSource):
             bool: 服务是否可用
         """
         try:
-            # 简单测试：检查是否能获取股票列表
-            await self.get_stock_list()
+            # 简单测试：获取一只股票的数据
+            await self.get_daily(
+                stock_code='600000',
+                start_date=date(2024, 1, 1),
+                end_date=date(2024, 1, 10),
+                adjust_type='qfq'
+            )
             return True
         except Exception:
             return False
