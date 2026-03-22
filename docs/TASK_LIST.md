@@ -45,7 +45,7 @@ clickhouse-client --version
 ```
 
 **验证标准**：
-- [ ] 命令返回版本号，无"command not found"错误
+- [x] 命令返回版本号，无"command not found"错误
 
 ---
 
@@ -65,8 +65,8 @@ sudo systemctl status clickhouse-server
 ```
 
 **验证标准**：
-- [ ] 服务状态显示 `active (running)`
-- [ ] 无错误日志
+- [x] 服务状态显示 `active (running)`
+- [x] 无错误日志
 
 ---
 
@@ -89,8 +89,8 @@ SHOW DATABASES;
 ```
 
 **验证标准**：
-- [ ] `SHOW DATABASES` 输出包含 `stock_scraper`
-- [ ] 无报错
+- [x] `SHOW DATABASES` 输出包含 `stock_scraper`
+- [x] 无报错
 
 ---
 
@@ -117,8 +117,8 @@ clickhouse-client --database stock_scraper -q "SHOW TABLES"
 ```
 
 **验证标准**：
-- [ ] 所有7张表都创建成功
-- [ ] 无SQL语法错误
+- [x] 所有7张表都创建成功
+- [x] 无SQL语法错误
 
 ---
 
@@ -142,8 +142,8 @@ python test_clickhouse_connect.py
 ```
 
 **验证标准**：
-- [ ] 输出 `Connection successful: [(1,)]`
-- [ ] 无连接错误
+- [x] 输出 `Connection successful: [(1,)]`
+- [x] 无连接错误
 
 ---
 
