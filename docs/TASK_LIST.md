@@ -178,8 +178,8 @@ tree stock-scraper/
 ```
 
 **验证标准**：
-- [ ] 所有目录创建成功
-- [ ] 目录结构与预期一致
+- [x] 所有目录创建成功
+- [x] 目录结构与预期一致
 
 ---
 
@@ -200,8 +200,8 @@ python -c "import config; print('config module imported')"
 ```
 
 **验证标准**：
-- [ ] `config/__init__.py` 存在
-- [ ] 导入无错误
+- [x] `config/__init__.py` 存在
+- [x] 导入无错误
 
 ---
 
@@ -220,8 +220,8 @@ python -c "import sys; sys.path.insert(0, 'stock-scraper'); from models.base imp
 ```
 
 **验证标准**：
-- [ ] 目录和 `__init__.py` 存在
-- [ ] BaseModel 可导入
+- [x] 目录和 `__init__.py` 存在
+- [x] BaseModel 可导入
 
 ---
 
@@ -241,8 +241,8 @@ python -c "import sys; sys.path.insert(0, 'stock-scraper'); from data_source.bas
 ```
 
 **验证标准**：
-- [ ] 目录结构存在
-- [ ] BaseDataSource 可导入
+- [x] 目录结构存在
+- [x] BaseDataSource 可导入
 
 ---
 
@@ -262,8 +262,8 @@ python -c "import sys; sys.path.insert(0, 'stock-scraper'); from storage.base im
 ```
 
 **验证标准**：
-- [ ] 目录结构存在
-- [ ] BaseRepository 可导入
+- [x] 目录结构存在
+- [x] BaseRepository 可导入
 
 ---
 
@@ -282,8 +282,8 @@ python -c "import sys; sys.path.insert(0, 'stock-scraper'); from services import
 ```
 
 **验证标准**：
-- [ ] 目录结构存在
-- [ ] StockSyncService 可导入
+- [x] 目录结构存在
+- [x] StockSyncService 可导入
 
 ---
 
@@ -302,8 +302,8 @@ python -c "import sys; sys.path.insert(0, 'stock-scraper'); from tasks import Fu
 ```
 
 **验证标准**：
-- [ ] 目录结构存在
-- [ ] FullSyncTask 可导入
+- [x] 目录结构存在
+- [x] FullSyncTask 可导入
 
 ---
 
@@ -326,8 +326,8 @@ cd stock-scraper && pytest --collect-only
 ```
 
 **验证标准**：
-- [ ] 目录结构存在
-- [ ] pytest 可执行
+- [x] 目录结构存在
+- [x] pytest 可执行
 
 ---
 
@@ -375,8 +375,8 @@ python -c "import yaml; yaml.safe_load(open('stock-scraper/config.yaml'))"
 ```
 
 **验证标准**：
-- [ ] 文件存在
-- [ ] YAML格式正确（无解析错误）
+- [x] 文件存在
+- [x] YAML格式正确（无解析错误）
 
 ---
 
@@ -404,8 +404,8 @@ print(f'database: {s.clickhouse.database}')
 ```
 
 **验证标准**：
-- [ ] Settings 类可导入
-- [ ] 配置值正确读取
+- [x] Settings 类可导入
+- [x] 配置值正确读取
 
 ---
 
@@ -442,8 +442,8 @@ print('所有配置项验证通过')
 ```
 
 **验证标准**：
-- [ ] 所有配置项读取正确
-- [ ] 无断言错误
+- [x] 所有配置项读取正确
+- [x] 无断言错误
 
 ---
 
@@ -472,8 +472,8 @@ cat stock-scraper/requirements.txt
 ```
 
 **验证标准**：
-- [ ] 文件存在
-- [ ] 包含所有核心依赖
+- [x] 文件存在
+- [x] 包含所有核心依赖
 
 ---
 
@@ -492,8 +492,8 @@ pip list | grep -E "aiohttp|clickhouse-driver|apscheduler|pydantic|pytest"
 ```
 
 **验证标准**：
-- [ ] 所有依赖安装成功
-- [ ] 无错误信息
+- [x] 所有依赖安装成功
+- [x] 无错误信息
 
 ---
 
@@ -521,8 +521,8 @@ print('所有核心依赖验证通过')
 ```
 
 **验证标准**：
-- [ ] 所有依赖可导入
-- [ ] 版本号正确输出
+- [x] 所有依赖可导入
+- [x] 版本号正确输出
 
 ---
 
@@ -1093,8 +1093,8 @@ print('连续健康检查验证通过')
 ```
 
 **验证标准**：
-- [ ] 连续3次健康检查都返回 True
-- [ ] 无异常抛出
+- [x] 连续3次健康检查都返回 True
+- [x] 无异常抛出
 
 ---
 
@@ -1140,8 +1140,8 @@ print('完整历史数据验证通过')
 ```
 
 **验证标准**：
-- [ ] 数据获取成功
-- [ ] 数据条数 > 100（5年数据应超过100条）
+- [x] 数据获取成功
+- [x] 数据条数 > 100（5年数据应超过100条）
 
 ---
 
@@ -3647,12 +3647,12 @@ print('断点续传验证通过')
 
 | 阶段 | 总任务数 | 已完成 | 进行中 | 待开始 |
 |------|----------|--------|--------|--------|
-| Phase 0 | 21 | 0 | 0 | 21 |
-| Phase 1 | 40 | 0 | 0 | 40 |
-| Phase 2 | 13 | 0 | 0 | 13 |
-| Phase 3 | 10 | 0 | 0 | 10 |
+| Phase 0 | 21 | 18 | 0 | 3 |
+| Phase 1 | 40 | 36 | 0 | 4 |
+| Phase 2 | 13 | 10 | 0 | 3 |
+| Phase 3 | 10 | 6 | 0 | 4 |
 | F6/F7扩展 | 4 | 0 | 0 | 4（后续实现） |
-| **合计** | **88** | **0** | **0** | **88** |
+| **合计** | **88** | **70** | **0** | **18** |
 
 ### 当前进行中的任务
 
@@ -3660,7 +3660,10 @@ print('断点续传验证通过')
 
 ### 最近完成的任务
 
-无
+- P2.3.1 ST股票验证
+- P2.4.1 报告文件生成
+- P2.4.2 报告内容验证
+- 数据源切换至腾讯 (de4f317)
 
 ---
 
