@@ -266,6 +266,80 @@ class AkshareClient(BaseDataSource):
         except Exception as e:
             raise NetworkError(f"Failed to get index data for {index_code}: {str(e)}")
 
+    async def get_split(
+        self,
+        stock_code: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> List["StockSplit"]:
+        """获取分红送股数据
+
+        Args:
+            stock_code: 股票代码
+            start_date: 开始日期（可选）
+            end_date: 结束日期（可选）
+
+        Returns:
+            List[StockSplit]: 分红送股记录列表
+        """
+        try:
+            await self.rate_limiter.wait()
+
+            # 使用akshare获取分红数据
+            df = await self._run_sync(
+                ak.stock_history_dividend_detail,
+                symbol=stock_code
+            )
+
+            if df is None or df.empty:
+                return []
+
+            from models.stock_split import StockSplit
+
+            split_list = []
+            for _, row in df.iterrows():
+                # 处理除权除息日
+                event_date = row.get('除权除息日')
+                if pd.isna(event_date) or event_date is None:
+                    continue
+                if isinstance(event_date, str):
+                    event_date = datetime.strptime(event_date, "%Y-%m-%d").date()
+                elif hasattr(event_date, 'date'):
+                    event_date = event_date.date()
+
+                # 过滤日期范围
+                if start_date and event_date < start_date:
+                    continue
+                if end_date and event_date > end_date:
+                    continue
+
+                # 判断事件类型
+                bonus = float(row.get('送股', 0) or 0)
+                transfer = float(row.get('转增', 0) or 0)
+                dividend = float(row.get('派息', 0) or 0)
+
+                if bonus > 0 or transfer > 0:
+                    event_type = "split"
+                elif dividend > 0:
+                    event_type = "dividend"
+                else:
+                    event_type = "allot"
+
+                split = StockSplit(
+                    stock_code=stock_code,
+                    event_date=event_date,
+                    event_type=event_type,
+                    bonus_ratio=bonus if bonus > 0 else None,
+                    dividend_ratio=dividend if dividend > 0 else None,
+                    price_adjust=None,
+                    data_source="akshare"
+                )
+                split_list.append(split)
+
+            return split_list
+        except Exception as e:
+            raise NetworkError(f"Failed to get split data for {stock_code}: {str(e)}")
+
     async def health_check(self) -> bool:
         """健康检查
 

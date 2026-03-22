@@ -7,6 +7,7 @@ from typing import List
 from models.stock_info import StockInfo
 from models.stock_daily import StockDaily
 from models.daily_index import DailyIndex
+from models.stock_split import StockSplit
 
 
 class BaseDataSource(ABC):
@@ -67,5 +68,24 @@ class BaseDataSource(ABC):
 
         Returns:
             bool: 服务是否可用
+        """
+        pass
+
+    @abstractmethod
+    async def get_split(
+        self,
+        stock_code: str,
+        start_date=None,
+        end_date=None
+    ) -> List[StockSplit]:
+        """获取分红送股数据
+
+        Args:
+            stock_code: 股票代码
+            start_date: 开始日期（可选）
+            end_date: 结束日期（可选）
+
+        Returns:
+            List[StockSplit]: 分红送股记录列表
         """
         pass
