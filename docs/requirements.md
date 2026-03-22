@@ -41,7 +41,7 @@
 
 ### 详细变更记录
 
-> **参考文档**：[CHANGELOG.md](./CHANGELOG.md)
+> **参考文档**：[REQUIREMENT_CHANGELOG.md](./REQUIREMENT_CHANGELOG.md)
 >
 > 详细的需求变更记录已拆分至独立的 `CHANGELOG.md` 文档，包括每次变更的变更前/变更后对比，便于审计追踪。
 >
