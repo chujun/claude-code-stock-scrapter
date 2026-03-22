@@ -4,6 +4,7 @@
 from services.exceptions import BusinessError, ValidationError, QualityError
 from services.quality_service import QualityService
 from services.report_service import ReportService
+from services.sync_service import StockSyncService
 
 __all__ = [
     "BusinessError",
@@ -11,4 +12,5 @@ __all__ = [
     "QualityError",
     "QualityService",
     "ReportService",
+    "StockSyncService",
 ]
