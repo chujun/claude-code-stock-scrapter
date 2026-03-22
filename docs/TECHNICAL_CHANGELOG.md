@@ -6,6 +6,36 @@
 
 ---
 
+## v1.1 (2026-03-22)
+
+### 变更概要
+
+数据源从 eastmoney 切换至腾讯。
+
+### 详细变更
+
+#### 1. 数据源切换
+
+| 组件 | 变更前 | 变更后 |
+|------|--------|--------|
+| 日线数据接口 | `akshare.stock_zh_a_hist` (eastmoney) | `akshare.stock_zh_a_hist_tx` (腾讯) |
+| 指数数据接口 | `akshare.stock_zh_index_daily_sina` | `akshare.stock_zh_index_daily` |
+
+变更原因：eastmoney API (`push2his.eastmoney.com`) 被代理服务器屏蔽，腾讯数据源可通过代理访问。
+
+---
+
+### 变更影响
+
+| 项目 | 状态 |
+|------|------|
+| 沪深股票 | ✅ 支持 |
+| 科创板 | ✅ 支持 |
+| 北交所 | ❌ 暂不支持 |
+| 成交量/换手率字段 | ❌ 腾讯数据源不提供 |
+
+---
+
 ## v1.0 (2026-03-22)
 
 ### 变更概要
