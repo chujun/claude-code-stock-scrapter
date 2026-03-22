@@ -1,0 +1,42 @@
+# A股股票数据爬虫系统 - 配置文件
+
+clickhouse:
+  host: "localhost"
+  port: 9000
+  database: "stock_scraper"
+  user: "default"
+  password: ""
+  batch_size: 1024
+  connect_timeout: 10
+  send_receive_timeout: 30
+
+data_source:
+  name: "akshare"
+  rate_limit:
+    base_interval: 1.5  # 基础请求间隔(秒)
+    max_interval: 10.0  # 最大间隔(秒)
+    increase_factor: 1.5  # 失败后增加倍数
+
+sync:
+  batch_size: 1024  # 批量写入大小
+  max_retries: 3  # 最大重试次数
+  retry_base_delay: 2.0  # 重试基础延迟(秒)
+  retry_max_delay: 60.0  # 重试最大延迟(秒)
+  exponential_base: 2  # 指数退避基数
+
+scheduler:
+  daily_sync_hour: 16  # 每日增量同步时间(时)
+  daily_sync_minute: 0  # 每日增量同步时间(分)
+  enabled: true  # 是否启用调度器
+
+report:
+  output_dir: "reports"
+  alert_file: "logs/alerts.log"
+  alert_threshold:
+    error_rate: 0.05  # 错误率超过5%告警
+    consecutive_failures: 10  # 连续失败10次告警
+
+quality:
+  change_pct_limit: 10.0  # 涨跌幅限制(%)
+  st_change_pct_limit: 20.0  # ST股票涨跌幅限制(%)
+  new_stock_change_pct_limit: 20.0  # 新股涨跌幅限制(%)

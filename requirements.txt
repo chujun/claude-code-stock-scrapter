@@ -1,0 +1,31 @@
+# A股股票数据爬虫系统 - Python依赖
+
+# 异步框架
+aiohttp>=3.9.0
+aiohttp-socks>=0.8.0  # 异步SOCKS代理支持
+
+# ClickHouse客户端
+clickhouse-driver>=0.2.0
+
+# 任务调度
+apscheduler>=3.10.0
+
+# 数据验证
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# 配置文件
+pyyaml>=6.0
+
+# 测试框架
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
+# 代码质量
+ruff>=0.1.0
+mypy>=1.7.0
+
+# 工具库
+python-dateutil>=2.8.0
+tqdm>=4.65.0  # 进度条
