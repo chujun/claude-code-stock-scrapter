@@ -82,6 +82,26 @@ class StockSyncService:
         """
         return self._sync_status.get(stock_code)
 
+    async def sync_stock_daily(
+        self,
+        stock_code: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        adjust_type: str = "qfq"
+    ) -> Dict[str, Any]:
+        """同步单只股票的历史数据
+
+        Args:
+            stock_code: 股票代码
+            start_date: 开始日期（默认为上市日或3年前）
+            end_date: 结束日期（默认为今天）
+            adjust_type: 复权类型
+
+        Returns:
+            Dict: 同步结果统计
+        """
+        return await self.sync_single_stock(stock_code, start_date, end_date, adjust_type)
+
     async def sync_single_stock(
         self,
         stock_code: str,
