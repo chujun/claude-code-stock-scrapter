@@ -118,7 +118,27 @@ class ClickHouseRepository(BaseRepository):
         col_list = ", ".join(sample.keys())
         sql = f"INSERT INTO {table} ({col_list}) VALUES"
 
-        values = [tuple(record.get(k) for k in sample.keys()) for record in filtered_records]
+        # 日期列需要转换为date对象，ClickHouse驱动不接受字符串
+        date_columns = {'trade_date', 'created_at', 'updated_at'}
+        processed_values = []
+        for record in filtered_records:
+            processed = []
+            for k in sample.keys():
+                v = record.get(k)
+                if k in date_columns and isinstance(v, str):
+                    # 尝试将ISO格式字符串转换为date对象
+                    try:
+                        v = datetime.strptime(v, '%Y-%m-%d').date()
+                    except ValueError:
+                        try:
+                            v = datetime.strptime(v, '%Y-%m-%d %H:%M:%S').date()
+                        except ValueError:
+                            # 无法解析，保持原值
+                            pass
+                processed.append(v)
+            processed_values.append(tuple(processed))
+
+        values = processed_values
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(

@@ -2390,6 +2390,31 @@ print('600000验证通过')
 
 ---
 
+#### P2.2.5 数据库写入验证
+
+**任务描述**：验证同步数据成功写入ClickHouse数据库
+
+**验证步骤**：
+```python
+# 运行小批量同步测试
+python scripts/small_batch_sync.py
+
+# 验证数据库记录
+clickhouse-client --query "SELECT stock_code, count() FROM stock_scraper.stock_daily GROUP BY stock_code"
+```
+
+**验证标准**：
+- [x] 4只股票同步成功 (600000, 000001, 300750, 688001)
+- [x] 数据库写入74条记录
+- [x] 日期类型正确转换（ClickHouse Date类型需要date对象）
+
+**修复记录**：
+- 修复 `storage/clickhouse_repo.py` 中日期转换bug
+- ClickHouse的Date类型需要Python `date`对象，不接受字符串
+- 添加了字符串到date对象的转换逻辑
+
+---
+
 ### P2.3: 异常场景验证
 
 #### P2.3.1 ST股票验证
