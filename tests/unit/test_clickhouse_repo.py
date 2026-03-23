@@ -70,7 +70,8 @@ class TestClickHouseRepository:
         """测试查询返回列表"""
         repo = ClickHouseRepository()
         mock_client = Mock()
-        mock_client.execute.return_value = (['stock_code', 'stock_name'], [('600000', '测试')])
+        # clickhouse driver with with_column_types=True returns (rows, column_types)
+        mock_client.execute.return_value = ([('600000', '测试')], [('stock_code', 'String'), ('stock_name', 'String')])
         repo._client = mock_client
         result = await repo.query("SELECT * FROM stock_info WHERE stock_code = '600000'")
         assert isinstance(result, list)

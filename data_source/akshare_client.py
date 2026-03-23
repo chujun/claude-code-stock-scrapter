@@ -356,6 +356,15 @@ class AkshareClient(BaseDataSource):
         if not stock_code:
             raise ValueError("stock_code cannot be empty")
 
+        # 标准化股票代码格式
+        symbol = stock_code
+        if not symbol.startswith(('sh', 'sz', 'SH', 'SZ')):
+            # 添加市场前缀
+            if symbol.startswith(('6', '9')):
+                symbol = f"SH{symbol}"
+            else:
+                symbol = f"SZ{symbol}"
+
         try:
             # 同步限流 - 使用time.sleep而非异步wait
             current_time = time.time()
@@ -364,22 +373,7 @@ class AkshareClient(BaseDataSource):
                 time.sleep(self.rate_limiter.base_interval - elapsed)
             self.rate_limiter.last_request_time = time.time()
 
-            # 使用akshare获取个股信息
-            df = ak.stock_individual_info_em(symbol=stock_code)
-
-            if df is None or df.empty:
-                return {
-                    'pe_ratio': None,
-                    'static_pe': None,
-                    'dynamic_pe': None,
-                    'pb_ratio': None,
-                    'total_market_cap': None,
-                    'float_market_cap': None
-                }
-
-            # 转换为字典
-            info_dict = dict(zip(df['item'].values, df['value'].values))
-
+            # 初始化结果
             result = {
                 'pe_ratio': None,
                 'static_pe': None,
@@ -389,34 +383,55 @@ class AkshareClient(BaseDataSource):
                 'float_market_cap': None
             }
 
-            # 解析各项指标
-            for key, value in info_dict.items():
-                if not value or value == '-':
-                    continue
+            # 优先使用雪球API（eastmoney被代理屏蔽）
+            try:
+                df = ak.stock_individual_basic_info_xq(symbol=symbol)
+                if df is not None and not df.empty:
+                    info_dict = dict(zip(df['item'].values, df['value'].values))
+                    # 解析发行PE（雪球只提供发行市盈率）
+                    pe_value = info_dict.get('pe_after_issuing')
+                    if pe_value and pe_value != '-' and pe_value != 'nan':
+                        try:
+                            result['pe_ratio'] = float(pe_value)
+                            result['static_pe'] = float(pe_value)
+                            result['dynamic_pe'] = float(pe_value)
+                        except (ValueError, TypeError):
+                            pass
+                    logger.debug(f"Xueqiu API got pe_after_issuing: {pe_value}")
+            except Exception as e:
+                logger.debug(f"Xueqiu API failed for {symbol}: {e}")
 
+            # 如果雪球没有获取到PE，尝试东方财富API（可能被屏蔽）
+            if result['pe_ratio'] is None:
                 try:
-                    # 市盈率相关（互斥匹配）
-                    if key == '市盈率' or key == 'PE(动静态)':
-                        result['pe_ratio'] = float(value)
-                    elif key == '静态市盈率':
-                        result['static_pe'] = float(value)
-                    elif key == '动态市盈率':
-                        result['dynamic_pe'] = float(value)
-
-                    # 市净率
-                    elif key == '市净率' or key == 'PB':
-                        result['pb_ratio'] = float(value)
-
-                    # 总市值
-                    elif '总市值' in key:
-                        result['total_market_cap'] = self._parse_market_cap(value)
-
-                    # 流通市值
-                    elif '流通市值' in key:
-                        result['float_market_cap'] = self._parse_market_cap(value)
-
-                except (ValueError, TypeError):
-                    continue
+                    df = ak.stock_individual_info_em(symbol=stock_code)
+                    if df is not None and not df.empty:
+                        info_dict = dict(zip(df['item'].values, df['value'].values))
+                        # 解析各项指标
+                        for key, value in info_dict.items():
+                            if not value or value == '-':
+                                continue
+                            try:
+                                # 市盈率相关（互斥匹配）
+                                if key == '市盈率' or key == 'PE(动静态)':
+                                    result['pe_ratio'] = float(value)
+                                elif key == '静态市盈率':
+                                    result['static_pe'] = float(value)
+                                elif key == '动态市盈率':
+                                    result['dynamic_pe'] = float(value)
+                                # 市净率
+                                elif key == '市净率' or key == 'PB':
+                                    result['pb_ratio'] = float(value)
+                                # 总市值
+                                elif '总市值' in key:
+                                    result['total_market_cap'] = self._parse_market_cap(value)
+                                # 流通市值
+                                elif '流通市值' in key:
+                                    result['float_market_cap'] = self._parse_market_cap(value)
+                            except (ValueError, TypeError):
+                                continue
+                except Exception as e:
+                    logger.debug(f"Eastmoney API failed for {stock_code}: {e}")
 
             return result
 

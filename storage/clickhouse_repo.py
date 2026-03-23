@@ -191,25 +191,28 @@ class ClickHouseRepository(BaseRepository):
         if params:
             result = await loop.run_in_executor(
                 self._executor,
-                lambda: self.client.execute(sql, params)
+                lambda: self.client.execute(sql, params, with_column_types=True)
             )
         else:
             result = await loop.run_in_executor(
                 self._executor,
-                lambda: self.client.execute(sql)
+                lambda: self.client.execute(sql, with_column_types=True)
             )
 
         # 转换结果为字典列表
-        if not result:
+        # result 格式: (rows, columns) 其中 columns = [(name, type), ...]
+        if not result or not result[0]:
             return []
 
-        if isinstance(result, tuple) and len(result) == 2:
-            columns, rows = result
-            return [dict(zip(columns, row)) for row in rows]
-        elif isinstance(result[0], tuple):
-            return [row[0] if len(row) == 1 else row for row in result]
-        else:
-            return result
+        rows, columns = result
+        if not rows:
+            return []
+
+        # 提取列名
+        col_names = [col[0] for col in columns]
+
+        # 转换每一行
+        return [dict(zip(col_names, row)) for row in rows]
 
     async def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> int:
         """执行SQL语句
