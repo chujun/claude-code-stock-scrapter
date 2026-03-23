@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import math
 import time
 from datetime import date, datetime
 from typing import List, Optional
@@ -390,13 +391,20 @@ class AkshareClient(BaseDataSource):
                     info_dict = dict(zip(df['item'].values, df['value'].values))
                     # 解析发行PE（雪球只提供发行市盈率）
                     pe_value = info_dict.get('pe_after_issuing')
-                    if pe_value and pe_value != '-' and pe_value != 'nan':
+                    # 检查是否为有效数值（排除None、空字符串、'-'和NaN）
+                    is_valid_pe = False
+                    if pe_value is not None and pe_value != '-' and pe_value != 'nan':
                         try:
-                            result['pe_ratio'] = float(pe_value)
-                            result['static_pe'] = float(pe_value)
-                            result['dynamic_pe'] = float(pe_value)
+                            pe_float = float(pe_value)
+                            if not math.isnan(pe_float):
+                                result['pe_ratio'] = pe_float
+                                result['static_pe'] = pe_float
+                                result['dynamic_pe'] = pe_float
+                                is_valid_pe = True
                         except (ValueError, TypeError):
                             pass
+                    if not is_valid_pe:
+                        logger.debug(f"Xueqiu API got invalid pe_after_issuing: {pe_value}")
                     logger.debug(f"Xueqiu API got pe_after_issuing: {pe_value}")
             except Exception as e:
                 logger.debug(f"Xueqiu API failed for {symbol}: {e}")
