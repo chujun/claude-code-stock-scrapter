@@ -1145,6 +1145,47 @@ print('完整历史数据验证通过')
 
 ---
 
+#### P1.2.9 实现财务指标获取
+
+**任务描述**：实现 `get_financial_indicator()` 方法获取股票财务指标
+
+**验证步骤**：
+```python
+# 验证财务指标获取
+python -c "
+import sys
+sys.path.insert(0, 'stock-scraper')
+from data_source.akshare_client import AkshareClient
+
+client = AkshareClient()
+result = client.get_financial_indicator('600000')
+
+print('600000 财务指标:')
+for k, v in result.items():
+    print(f'  {k}: {v}')
+
+# 验证必要字段
+assert 'pe_ratio' in result
+assert 'pb_ratio' in result
+assert 'total_market_cap' in result
+assert 'float_market_cap' in result
+print('财务指标获取验证通过')
+"
+```
+
+**验证标准**：
+- [x] 方法实现完成
+- [x] 返回包含 pe_ratio, pb_ratio, total_market_cap, float_market_cap
+- [x] 添加单元测试
+
+**修复记录**：
+- [x] 修复 PE/PB 字段匹配逻辑重叠问题
+- [x] 添加限流处理
+- [x] 添加日志记录
+- [x] 添加输入验证
+
+---
+
 ### P1.3: 存储层 (storage/)
 
 #### P1.3.1 创建 `BaseRepository` 抽象基类

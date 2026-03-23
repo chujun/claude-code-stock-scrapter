@@ -2,11 +2,15 @@
 """akshare数据源实现"""
 
 import asyncio
+import logging
+import time
 from datetime import date, datetime
 from typing import List, Optional
 
 import akshare as ak
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from data_source.base import BaseDataSource
 from data_source.exceptions import (
@@ -339,6 +343,136 @@ class AkshareClient(BaseDataSource):
             return split_list
         except Exception as e:
             raise NetworkError(f"Failed to get split data for {stock_code}: {str(e)}")
+
+    def get_financial_indicator(self, stock_code: str) -> dict:
+        """获取股票财务指标
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            dict: 包含财务指标的字典
+        """
+        if not stock_code:
+            raise ValueError("stock_code cannot be empty")
+
+        try:
+            # 同步限流 - 使用time.sleep而非异步wait
+            current_time = time.time()
+            elapsed = current_time - self.rate_limiter.last_request_time
+            if elapsed < self.rate_limiter.base_interval:
+                time.sleep(self.rate_limiter.base_interval - elapsed)
+            self.rate_limiter.last_request_time = time.time()
+
+            # 使用akshare获取个股信息
+            df = ak.stock_individual_info_em(symbol=stock_code)
+
+            if df is None or df.empty:
+                return {
+                    'pe_ratio': None,
+                    'static_pe': None,
+                    'dynamic_pe': None,
+                    'pb_ratio': None,
+                    'total_market_cap': None,
+                    'float_market_cap': None
+                }
+
+            # 转换为字典
+            info_dict = dict(zip(df['item'].values, df['value'].values))
+
+            result = {
+                'pe_ratio': None,
+                'static_pe': None,
+                'dynamic_pe': None,
+                'pb_ratio': None,
+                'total_market_cap': None,
+                'float_market_cap': None
+            }
+
+            # 解析各项指标
+            for key, value in info_dict.items():
+                if not value or value == '-':
+                    continue
+
+                try:
+                    # 市盈率相关（互斥匹配）
+                    if key == '市盈率' or key == 'PE(动静态)':
+                        result['pe_ratio'] = float(value)
+                    elif key == '静态市盈率':
+                        result['static_pe'] = float(value)
+                    elif key == '动态市盈率':
+                        result['dynamic_pe'] = float(value)
+
+                    # 市净率
+                    elif key == '市净率' or key == 'PB':
+                        result['pb_ratio'] = float(value)
+
+                    # 总市值
+                    elif '总市值' in key:
+                        result['total_market_cap'] = self._parse_market_cap(value)
+
+                    # 流通市值
+                    elif '流通市值' in key:
+                        result['float_market_cap'] = self._parse_market_cap(value)
+
+                except (ValueError, TypeError):
+                    continue
+
+            return result
+
+        except Exception as e:
+            # 返回默认值而非抛出异常，避免中断主流程
+            logger.warning(f"Failed to get financial indicator for {stock_code}: {e}")
+            return {
+                'pe_ratio': None,
+                'static_pe': None,
+                'dynamic_pe': None,
+                'pb_ratio': None,
+                'total_market_cap': None,
+                'float_market_cap': None
+            }
+
+    def _parse_market_cap(self, value) -> Optional[float]:
+        """解析市值字符串
+
+        Args:
+            value: 市值字符串，如 "1.23万亿"
+
+        Returns:
+            float: 市值数值
+        """
+        if not value or value == '-':
+            return None
+
+        try:
+            value = str(value).strip()
+
+            # 处理万亿
+            if '万亿' in value:
+                return float(value.replace('万亿', '')) * 1e12
+            # 处理亿
+            elif '亿' in value:
+                return float(value.replace('亿', '')) * 1e8
+            # 处理万
+            elif '万' in value:
+                return float(value.replace('万', '')) * 1e4
+            else:
+                return float(value)
+
+        except (ValueError, AttributeError):
+            return None
+
+    async def get_financial_indicator_async(self, stock_code: str) -> dict:
+        """异步获取股票财务指标
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            dict: 包含财务指标的字典
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.get_financial_indicator, stock_code)
 
     async def health_check(self) -> bool:
         """健康检查

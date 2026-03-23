@@ -89,3 +89,33 @@ class BaseDataSource(ABC):
             List[StockSplit]: 分红送股记录列表
         """
         pass
+
+    @abstractmethod
+    def get_financial_indicator(self, stock_code: str) -> dict:
+        """获取股票财务指标
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            dict: 包含财务指标的字典
+                - pe_ratio: 市盈率（动态）
+                - static_pe: 静态市盈率
+                - dynamic_pe: 动态市盈率
+                - pb_ratio: 市净率
+                - total_market_cap: 总市值
+                - float_market_cap: 流通市值
+        """
+        pass
+
+    @abstractmethod
+    async def get_financial_indicator_async(self, stock_code: str) -> dict:
+        """异步获取股票财务指标
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            dict: 包含财务指标的字典
+        """
+        pass
