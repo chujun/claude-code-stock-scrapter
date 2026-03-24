@@ -2455,6 +2455,8 @@ clickhouse-client --query "SELECT stock_code, count() FROM stock_scraper.stock_d
 - 添加了字符串到date对象的转换逻辑
 - 修复 `query()` 方法使用 `with_column_types=True` 获取列名
 - 财务指标数据源切换至Xueqiu API（eastmoney被代理屏蔽）
+- 修复 `ClickHouseRepository.__init__` 接收 `ClickHouseSettings` 对象（2026-03-23）
+- 修复 `full_batch_sync.py` 使用 `get_settings()` 而非 `Settings()`（2026-03-23）
 
 ---
 

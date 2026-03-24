@@ -1,11 +1,12 @@
 # services/sync_service.py
 """股票同步服务"""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from data_source.base import BaseDataSource
 from storage.base import BaseRepository
+from models.stock_info import StockInfo
 from models.stock_daily import StockDaily
 from models.sync_report import SyncReport
 from services.quality_service import QualityService
@@ -195,6 +196,56 @@ class StockSyncService:
                 'failed_count': 1,
                 'status': 'failed',
                 'error': f'Unexpected error: {str(e)}'
+            }
+
+    async def sync_stock_info(self, stocks: List[StockInfo]) -> Dict[str, Any]:
+        """同步股票基本信息
+
+        Args:
+            stocks: 股票信息列表
+
+        Returns:
+            Dict: 同步结果统计
+        """
+        if not stocks:
+            return {
+                'total': 0,
+                'success_count': 0,
+                'failed_count': 0,
+                'status': 'success',
+                'message': 'No stock info to sync'
+            }
+
+        try:
+            # 转换为字典格式
+            record_dicts = [s.model_dump() for s in stocks]
+            # 转换日期/日期时间为 ISO 字符串
+            for d in record_dicts:
+                for key, value in d.items():
+                    if isinstance(value, datetime):
+                        # 确保 datetime 有时区信息
+                        if value.tzinfo is None:
+                            value = value.replace(tzinfo=timezone.utc)
+                        d[key] = value.isoformat()
+                    elif isinstance(value, date):
+                        d[key] = value.isoformat()
+
+            # 插入数据库
+            await self.storage.insert('stock_info', record_dicts)
+
+            return {
+                'total': len(stocks),
+                'success_count': len(stocks),
+                'failed_count': 0,
+                'status': 'success'
+            }
+        except Exception as e:
+            return {
+                'total': len(stocks),
+                'success_count': 0,
+                'failed_count': len(stocks),
+                'status': 'failed',
+                'error': str(e)
             }
 
     async def batch_sync(

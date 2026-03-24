@@ -121,66 +121,123 @@
 
 ### 4.2 stock_daily（股票日线行情表）
 
-| 字段名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| stock_code | string | ✓ | 股票代码 |
-| trade_date | date | ✓ | 交易日期 |
-| open | float | | 前复权开盘价 |
-| high | float | | 前复权最高价 |
-| low | float | | 前复权最低价 |
-| close | float | ✓ | 前复权收盘价 |
-| volume | integer | | 成交量（手） |
-| turnover | float | | 成交额（元） |
-| change_pct | float | | 涨跌幅（%） |
-| pre_close | float | | 前复权前收盘价 |
-| amplitude_pct | float | | 振幅（%） |
-| turnover_rate | float | | 换手率（%） |
-| total_market_cap | float | | 总市值（元） |
-| float_market_cap | float | | 流通市值（元） |
-| pe_ratio | float | | 市盈率（动态） |
-| static_pe | float | | 静态市盈率 |
-| dynamic_pe | float | | 动态市盈率 |
-| pb_ratio | float | | 市净率 |
-| is_adjusted | boolean | ✓ | 是否复权数据 |
-| adjust_type | string | ✓ | 复权类型，qfq/hfq/none |
-| data_source | string | ✓ | 数据来源标识 |
-| quality_flag | string | | 数据质量标记，good=正常，warn=可疑，error=异常 |
-| created_at | datetime | ✓ | 创建时间 |
-| updated_at | datetime | ✓ | 修改时间 |
+| 字段名 | 类型 | 必填 | 说明 | 数据情况 |
+|--------|------|------|------|----------|
+| stock_code | string | ✓ | 股票代码，如 600000、000001 | ✅ 100% 完整 |
+| trade_date | date | ✓ | 交易日期 | ✅ 100% 完整 |
+| open | float | | 前复权开盘价，单位元 | ✅ 100% 完整 |
+| high | float | | 前复权最高价，单位元 | ✅ 100% 完整 |
+| low | float | | 前复权最低价，单位元 | ✅ 100% 完整 |
+| close | float | ✓ | 前复权收盘价，单位元 | ✅ 100% 完整 |
+| volume | integer | | 成交量（手），腾讯数据源不提供 | ❌ 固定为 0 |
+| turnover | float | | 成交额（元），腾讯数据源对应 amount 字段 | ✅ 100% 完整 |
+| change_pct | float | | 涨跌幅（%），通过前后收盘价计算 | ✅ 100% 完整 |
+| pre_close | float | | 前复权前收盘价 | ✅ 100% 完整 |
+| amplitude_pct | float | | 振幅（%），腾讯数据源不提供 | ❌ 固定为 0 |
+| turnover_rate | float | | 换手率（%），依赖 volume 计算 | ❌ 固定为 0 |
+| total_market_cap | float | | 总市值（元） | ❌ 未采集 |
+| float_market_cap | float | | 流通市值（元） | ❌ 未采集 |
+| pe_ratio | float | | 市盈率（动态），从雪球API采集 | ⚠️ 覆盖率 <1% |
+| static_pe | float | | 静态市盈率，从雪球API采集 | ⚠️ 覆盖率 <1% |
+| dynamic_pe | float | | 动态市盈率，从雪球API采集 | ⚠️ 覆盖率 <1% |
+| pb_ratio | float | | 市净率 | ❌ 未采集 |
+| is_adjusted | boolean | ✓ | 是否复权数据 | ✅ 固定为 true |
+| adjust_type | string | ✓ | 复权类型，qfq/hfq/none | ✅ 固定为 qfq |
+| data_source | string | ✓ | 数据来源标识 | ✅ 固定为 akshare_tx |
+| quality_flag | string | | 数据质量标记，good=正常，warn=可疑，error=异常 | ✅ 固定为 good |
+| created_at | datetime | ✓ | 创建时间 | ✅ 100% 完整 |
+| updated_at | datetime | ✓ | 修改时间 | ✅ 100% 完整 |
 
 **索引**：
 - 联合唯一索引：`(trade_date, stock_code)`
 - 普通索引：`stock_code`
 
+**数据来源说明**：
+- 当前使用 akshare 的 `stock_zh_a_hist_tx` 腾讯数据源
+- 复权类型固定为 qfq（前复权）
+- 腾讯数据源不提供：成交量(volume)、振幅(amplitude_pct)、换手率(turnover_rate)
+
+**实测数据统计**：
+- 总记录数：66,986 条
+- 覆盖股票：3,392 只
+- 交易天数：20 天（2026-02-24 ~ 2026-03-23）
+- 价格范围：0.44 ~ 1,491.66 元
+- 中位数价格：13.14 元
+
 ### 4.3 sync_status（同步状态记录表）
+
+用于断点续传，记录每只股票的同步进度。
 
 | 字段名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| stock_code | string | | 股票代码，null表示全量任务 |
-| sync_type | string | ✓ | 同步类型，full/daily/init |
-| last_sync_date | date | | 最后同步日期 |
-| status | string | ✓ | 状态，running/success/failed/partial |
-| record_count | integer | | 本次同步记录数 |
-| error_msg | string | | 错误信息 |
-| started_at | datetime | | 任务开始时间 |
-| finished_at | datetime | | 任务结束时间 |
+| stock_code | string | | 股票代码，为空表示全量同步任务 |
+| sync_type | string | ✓ | 同步类型：full=全量同步，daily=每日增量 |
+| status | string | ✓ | 状态：running=运行中，success=成功，failed=失败，partial=部分成功 |
+| last_sync_time | datetime | | 最后同步时间 |
+| records_synced | integer | | 本次同步记录数 |
+| error_message | string | | 错误信息 |
 | created_at | datetime | ✓ | 创建时间 |
 | updated_at | datetime | ✓ | 修改时间 |
 
-### 4.4 daily_index（大盘指数日线表）
+**索引**：
+- 联合唯一索引：`(stock_code, sync_type)`
+
+### 4.4 sync_error（同步错误表）
+
+记录同步过程中的错误信息。
 
 | 字段名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| index_code | string | ✓ | 指数代码，000001/399001/399006 |
-| index_name | string | ✓ | 指数名称 |
+| stock_code | string | ✓ | 股票代码 |
+| error_type | string | ✓ | 错误类型：network=网络错误，data=数据错误，business=业务错误 |
+| error_message | string | ✓ | 错误详情 |
+| error_code | string | | 错误代码 |
+| retry_count | integer | | 重试次数 |
+| created_at | datetime | ✓ | 创建时间 |
+
+**索引**：
+- 普通索引：`(stock_code, created_at)`
+
+### 4.5 sync_report（同步报告表）
+
+记录每次同步任务的汇总报告。
+
+| 字段名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| id | integer | ✓ | 报告ID，自增 |
+| sync_type | string | ✓ | 同步类型：full=全量，daily=增量，verification=验证 |
+| trigger_type | string | ✓ | 触发类型：manual=手动，scheduled=定时，api=API调用 |
+| total_stocks | integer | ✓ | 目标股票总数 |
+| success_count | integer | ✓ | 成功数量 |
+| failed_count | integer | ✓ | 失败数量 |
+| quality_pass_count | integer | | 质量校验通过数量 |
+| quality_fail_count | integer | | 质量校验失败数量 |
+| status | string | ✓ | 任务状态：running=运行中，success=成功，failed=失败 |
+| start_time | datetime | ✓ | 开始时间 |
+| end_time | datetime | | 结束时间 |
+| duration_seconds | integer | | 持续时长，单位秒 |
+| error_details | string | | 错误详情汇总 |
+| created_at | datetime | ✓ | 创建时间 |
+
+**索引**：
+- 主键索引：`(id)`
+
+### 4.6 daily_index（大盘指数日线表）
+
+存储上证指数、深证成指、创业板指等大盘指数数据。
+
+| 字段名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| index_code | string | ✓ | 指数代码：000001=上证指数，399001=深证成指，399006=创业板指 |
+| index_name | string | ✓ | 指数名称：上证指数、深证成指、创业板指 |
 | trade_date | date | ✓ | 交易日期 |
 | open | float | | 开盘点位 |
 | high | float | | 最高点位 |
 | low | float | | 最低点位 |
 | close | float | ✓ | 收盘点位 |
-| volume | integer | | 成交量（手） |
-| turnover | float | | 成交额（亿元） |
-| change_pct | float | | 涨跌幅（%） |
+| volume | integer | | 成交量，单位股 |
+| turnover | float | | 成交额，单位元 |
+| change_pct | float | | 涨跌幅，单位% |
 | data_source | string | ✓ | 数据来源标识 |
 | created_at | datetime | ✓ | 创建时间 |
 | updated_at | datetime | ✓ | 修改时间 |
@@ -188,24 +245,24 @@
 **索引**：
 - 联合唯一索引：`(trade_date, index_code)`
 
-### 4.5 stock_split（分红送股记录表）
+### 4.7 stock_split（分红送股记录表）
+
+记录股票的分红、送股、转增事件。
 
 | 字段名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | stock_code | string | ✓ | 股票代码 |
-| event_date | date | ✓ | 事件日期 |
-| event_type | string | ✓ | 事件类型，split/dividend/allot/issue |
-| bonus_ratio | float | | 送股比例 |
-| dividend_ratio | float | | 分红比例 |
-| price_adjust | float | | 价格调整因子 |
+| trade_date | date | ✓ | 除权除息日/红利发放日 |
+| event_type | string | ✓ | 事件类型：dividend=分红，split=送股，allot=配股 |
+| before_quantity | float | | 事件前持股数 |
+| after_quantity | float | | 事件后持股数 |
+| ratio_before | float | | 送股前比例（如每10股送X股） |
+| ratio_after | float | | 送股后比例 |
 | data_source | string | ✓ | 数据来源标识 |
 | created_at | datetime | ✓ | 创建时间 |
-| updated_at | datetime | ✓ | 修改时间 |
 
 **索引**：
-- 联合唯一索引：`(stock_code, event_date, event_type)`
-
-### 4.6 sync_error（同步异常记录表）
+- 联合唯一索引：`(stock_code, trade_date)`
 
 | 字段名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
@@ -228,37 +285,6 @@
 - 普通索引：`error_type`
 - 普通索引：`status`
 - 普通索引：`created_at`
-
-### 4.7 sync_report（同步报告表）
-
-| 字段名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| id | integer | ✓ | 自增主键 |
-| sync_type | string | ✓ | 同步类型，full/daily/init |
-| trigger_type | string | ✓ | 触发方式，manual/scheduled/on_demand |
-| started_at | datetime | ✓ | 开始时间 |
-| finished_at | datetime | | 结束时间 |
-| duration_seconds | integer | | 持续时长（秒） |
-| total_stocks | integer | | 处理股票总数 |
-| success_count | integer | | 成功数量 |
-| failed_count | integer | | 失败数量 |
-| network_error_count | integer | | 网络异常数量 |
-| data_error_count | integer | | 数据异常数量 |
-| business_error_count | integer | | 业务异常数量 |
-| new_records | integer | | 新增记录数 |
-| updated_records | integer | | 更新记录数 |
-| data_completeness | float | | 数据完整率（%） |
-| quality_pass_rate | float | | 质量校验通过率（%） |
-| avg_duration_per_stock | float | | 平均单只耗时（秒） |
-| api_call_count | integer | | API调用次数 |
-| status | string | ✓ | 状态，running/success/partial/failed |
-| report_summary | text | | 报告摘要 |
-| created_at | datetime | ✓ | 创建时间 |
-
-**索引**：
-- 普通索引：`sync_type`
-- 普通索引：`started_at`
-- 普通索引：`status`
 
 ---
 

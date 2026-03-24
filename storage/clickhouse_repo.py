@@ -44,6 +44,7 @@ class ClickHouseRepository(BaseRepository):
 
     def __init__(
         self,
+        config=None,
         host: str = "localhost",
         port: int = 9000,
         database: str = "stock_scraper",
@@ -54,6 +55,7 @@ class ClickHouseRepository(BaseRepository):
         """初始化ClickHouse连接
 
         Args:
+            config: ClickHouseSettings配置对象（优先使用）
             host: ClickHouse主机地址
             port: ClickHouse端口
             database: 数据库名称
@@ -61,11 +63,19 @@ class ClickHouseRepository(BaseRepository):
             password: 密码
             max_workers: 线程池最大工作线程数
         """
-        self.host = host
-        self.port = port
-        self.database = database
-        self.user = user
-        self.password = password
+        # 如果提供了config对象，优先使用其中的配置
+        if config is not None:
+            self.host = config.host
+            self.port = config.port
+            self.database = config.database
+            self.user = config.user
+            self.password = config.password
+        else:
+            self.host = host
+            self.port = port
+            self.database = database
+            self.user = user
+            self.password = password
         self._client: Optional[Client] = None
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -100,7 +110,12 @@ class ClickHouseRepository(BaseRepository):
 
         _validate_table_name(table)
 
-        columns = self.get_table_columns(table)
+        # 获取表字段（在线程池中执行以避免线程问题）
+        loop = asyncio.get_event_loop()
+        columns = await loop.run_in_executor(
+            self._executor,
+            lambda: self.get_table_columns(table)
+        )
         if not columns:
             raise ValueError(f"Table {table} not found or has no columns")
 
@@ -118,29 +133,39 @@ class ClickHouseRepository(BaseRepository):
         col_list = ", ".join(sample.keys())
         sql = f"INSERT INTO {table} ({col_list}) VALUES"
 
-        # 日期列需要转换为date对象，ClickHouse驱动不接受字符串
-        date_columns = {'trade_date', 'created_at', 'updated_at'}
+        # 日期列需要转换为date/datetime对象，ClickHouse驱动不接受字符串
+        date_columns = {'trade_date', 'list_date', 'delist_date'}
+        datetime_columns = {'created_at', 'updated_at'}
         processed_values = []
         for record in filtered_records:
             processed = []
             for k in sample.keys():
                 v = record.get(k)
-                if k in date_columns and isinstance(v, str):
-                    # 尝试将ISO格式字符串转换为date对象
-                    try:
-                        v = datetime.strptime(v, '%Y-%m-%d').date()
-                    except ValueError:
+                if isinstance(v, str):
+                    if k in date_columns:
+                        # 解析为 date 对象
                         try:
-                            v = datetime.strptime(v, '%Y-%m-%d %H:%M:%S').date()
+                            v = datetime.strptime(v, '%Y-%m-%d').date()
                         except ValueError:
-                            # 无法解析，保持原值
-                            pass
+                            try:
+                                v = datetime.strptime(v, '%Y-%m-%d %H:%M:%S').date()
+                            except ValueError:
+                                pass
+                    elif k in datetime_columns:
+                        # 解析为 datetime 对象，保留时区信息
+                        try:
+                            # 先尝试解析带时区的 ISO 格式
+                            v = datetime.fromisoformat(v)
+                        except ValueError:
+                            try:
+                                v = datetime.strptime(v, '%Y-%m-%d %H:%M:%S')
+                            except ValueError:
+                                pass
                 processed.append(v)
             processed_values.append(tuple(processed))
 
         values = processed_values
 
-        loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             self._executor,
             lambda: self.client.execute(sql, values)
