@@ -150,13 +150,12 @@ class StockSyncService:
             existing_dates: Set[date] = set()
             filtered_start_date = start_date
 
-            if strategy == SyncStrategy.SKIP:
-                # skip模式: 查询已存在的日期，完全跳过已存在的股票
+            # SKIP和INCREMENTAL策略都需要先检查数据库
+            if strategy in (SyncStrategy.SKIP, SyncStrategy.INCREMENTAL):
                 existing_dates = await self.storage.get_existing_dates(
                     'stock_daily', stock_code, 'trade_date'
                 )
                 if existing_dates:
-                    # 检查请求的日期范围内是否还有未同步的日期
                     if start_date is None:
                         # 无开始日期，检查是否有最新日期之外的数据需要同步
                         latest_existing = max(existing_dates)

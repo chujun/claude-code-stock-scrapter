@@ -463,6 +463,72 @@ class TestStockSyncServiceIntegration:
         assert SyncStrategy.INCREMENTAL.value == 'incremental'
 
     @pytest.mark.asyncio
+    async def test_sync_incremental_skips_api_call_when_all_dates_exist(self):
+        """测试INCREMENTAL策略-当所有日期已存在时跳过API调用"""
+        data_source = Mock(spec=AkshareClient)
+        storage = Mock(spec=ClickHouseRepository)
+        quality_service = Mock(spec=QualityService)
+        report_service = Mock(spec=ReportService)
+
+        # 模拟所有请求日期都已存在
+        existing_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)}
+        storage.get_existing_dates = AsyncMock(return_value=existing_dates)
+
+        service = StockSyncService(
+            data_source=data_source,
+            storage=storage,
+            quality_service=quality_service,
+            report_service=report_service
+        )
+
+        result = await service.sync_single_stock(
+            '600000',
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 3),
+            strategy=SyncStrategy.INCREMENTAL
+        )
+
+        # 验证API未被调用
+        data_source.get_daily.assert_not_called()
+        # 验证返回跳过
+        assert result['status'] == 'success'
+        assert result['success_count'] == 0
+        assert result['skipped_count'] == 3
+
+    @pytest.mark.asyncio
+    async def test_sync_skip_skips_api_call_when_all_dates_exist(self):
+        """测试SKIP策略-当所有日期已存在时跳过API调用"""
+        data_source = Mock(spec=AkshareClient)
+        storage = Mock(spec=ClickHouseRepository)
+        quality_service = Mock(spec=QualityService)
+        report_service = Mock(spec=ReportService)
+
+        # 模拟所有请求日期都已存在
+        existing_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)}
+        storage.get_existing_dates = AsyncMock(return_value=existing_dates)
+
+        service = StockSyncService(
+            data_source=data_source,
+            storage=storage,
+            quality_service=quality_service,
+            report_service=report_service
+        )
+
+        result = await service.sync_single_stock(
+            '600000',
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 3),
+            strategy=SyncStrategy.SKIP
+        )
+
+        # 验证API未被调用
+        data_source.get_daily.assert_not_called()
+        # 验证返回跳过
+        assert result['status'] == 'success'
+        assert result['success_count'] == 0
+        assert result['skipped_count'] == 3
+
+    @pytest.mark.asyncio
     async def test_sync_with_skip_strategy_no_start_date(self):
         """测试SKIP策略-无开始日期时从最新日期后继续"""
         data_source = Mock(spec=AkshareClient)
