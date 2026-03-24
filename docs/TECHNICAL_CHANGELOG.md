@@ -194,6 +194,37 @@
 
 ---
 
+## v1.3 (2026-03-24)
+
+### 新增功能：同步策略支持
+
+优化了同步程序的重复数据处理逻辑，新增三种同步策略：
+
+| 策略 | 值 | 说明 | 适用场景 |
+|------|-----|------|----------|
+| skip | `--strategy skip` | 已存在的日期完全跳过，最快 | 首次同步后快速检查 |
+| overwrite | `--strategy overwrite` | 覆盖所有数据（默认） | 数据可能有修正 |
+| incremental | `--strategy incremental` | 只同步新增日期 | 日常增量同步（推荐） |
+
+**使用示例**：
+```bash
+# 跳过已存在（最快，适合恢复中断的同步）
+python scripts/full_batch_sync.py --strategy skip
+
+# 增量同步（推荐日常使用）
+python scripts/full_batch_sync.py --strategy incremental
+
+# 全量覆盖
+python scripts/full_batch_sync.py --strategy overwrite
+```
+
+**技术实现**：
+- `SyncStrategy` 枚举类定义三种策略
+- `get_existing_dates()` 方法查询已存在的日期
+- `sync_single_stock()` 根据策略过滤数据
+
+---
+
 ## v1.1 (2026-03-22)
 
 ### 变更概要

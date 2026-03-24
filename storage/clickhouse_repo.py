@@ -5,7 +5,7 @@ import asyncio
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from clickhouse_driver import Client
 
@@ -264,6 +264,27 @@ class ClickHouseRepository(BaseRepository):
         if isinstance(result, tuple):
             return result[0] if result else 0
         return result if result else 0
+
+    async def get_existing_dates(
+        self,
+        table: str,
+        stock_code: str,
+        date_column: str = "trade_date"
+    ) -> Set[date]:
+        """获取股票已存在的日期集合
+
+        Args:
+            table: 表名
+            stock_code: 股票代码
+            date_column: 日期列名
+
+        Returns:
+            Set[date]: 已存在的日期集合
+        """
+        _validate_table_name(table)
+        sql = f"SELECT {date_column} FROM {table} WHERE stock_code = %(stock_code)s"
+        result = await self.query(sql, {"stock_code": stock_code})
+        return {row[date_column] for row in result}
 
     def get_table_columns(self, table: str) -> List[str]:
         """获取表的字段列表

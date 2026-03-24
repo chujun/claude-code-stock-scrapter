@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from data_source.akshare_client import AkshareClient
 from storage.clickhouse_repo import ClickHouseRepository
 from services.quality_service import QualityService
-from services.sync_service import StockSyncService
+from services.sync_service import StockSyncService, SyncStrategy
 from config.settings import get_settings
 
 # 配置日志
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class FullBatchSync:
     """全量股票批量同步"""
 
-    def __init__(self, days: int = 30):
+    def __init__(self, days: int = 30, strategy: SyncStrategy = SyncStrategy.OVERWRITE):
         self.settings = get_settings()
         self.data_source = AkshareClient()
         self.storage = ClickHouseRepository(self.settings.clickhouse)
@@ -41,6 +41,7 @@ class FullBatchSync:
             quality_service=self.quality
         )
         self.days = days
+        self.strategy = strategy
         self.start_date = date.today() - timedelta(days=days)
         self.end_date = date.today()
 
@@ -62,10 +63,11 @@ class FullBatchSync:
     async def sync_stock(self, stock_code: str) -> dict:
         """同步单只股票"""
         try:
-            result = await self.service.sync_stock_daily(
+            result = await self.service.sync_single_stock(
                 stock_code,
                 start_date=self.start_date,
-                end_date=self.end_date
+                end_date=self.end_date,
+                strategy=self.strategy
             )
             return {
                 'code': stock_code,
@@ -94,6 +96,7 @@ class FullBatchSync:
         logger.info(f"全量股票数据同步")
         logger.info(f"=" * 60)
         logger.info(f"日期范围: {self.start_date} ~ {self.end_date}")
+        logger.info(f"同步策略: {self.strategy.value}")
         logger.info(f"限流间隔: {self.data_source.rate_limiter.base_interval}s")
         logger.info(f"=" * 60)
 
@@ -195,9 +198,17 @@ async def main():
     parser.add_argument('--limit', type=int, default=None, help='限制数量（用于测试）')
     parser.add_argument('--offset', type=int, default=0, help='起始偏移')
     parser.add_argument('--days', type=int, default=30, help='抓取天数')
+    parser.add_argument(
+        '--strategy',
+        type=str,
+        choices=['skip', 'overwrite', 'incremental'],
+        default='overwrite',
+        help='同步策略: skip=跳过已存在, overwrite=覆盖, incremental=增量(默认)'
+    )
     args = parser.parse_args()
 
-    sync = FullBatchSync(days=args.days)
+    strategy = SyncStrategy(args.strategy)
+    sync = FullBatchSync(days=args.days, strategy=strategy)
     try:
         result = await sync.run(limit=args.limit, offset=args.offset)
         return result

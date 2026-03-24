@@ -1,8 +1,10 @@
 # services/sync_service.py
 """股票同步服务"""
 
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+import logging
+from datetime import date, datetime, timedelta, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, Set
 
 from data_source.base import BaseDataSource
 from storage.base import BaseRepository
@@ -12,6 +14,20 @@ from models.sync_report import SyncReport
 from services.quality_service import QualityService
 from services.report_service import ReportService
 from services.exceptions import BusinessError
+
+logger = logging.getLogger(__name__)
+
+
+class SyncStrategy(str, Enum):
+    """同步策略枚举
+
+    - skip: 已存在的日期跳过（最快，适合增量后不再更新的历史数据）
+    - overwrite: 覆盖所有数据（默认，ReplacingMergeTree自动去重）
+    - incremental: 只同步新增日期（智能增量，平衡速度和数据新鲜度）
+    """
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+    INCREMENTAL = "incremental"
 
 
 class StockSyncService:
@@ -108,7 +124,8 @@ class StockSyncService:
         stock_code: str,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
-        adjust_type: str = "qfq"
+        adjust_type: str = "qfq",
+        strategy: SyncStrategy = SyncStrategy.OVERWRITE
     ) -> Dict[str, Any]:
         """同步单只股票的历史数据
 
@@ -117,6 +134,7 @@ class StockSyncService:
             start_date: 开始日期（默认为上市日或3年前）
             end_date: 结束日期（默认为今天）
             adjust_type: 复权类型
+            strategy: 同步策略，决定如何处理已存在的数据
 
         Returns:
             Dict: 同步结果统计
@@ -128,10 +146,55 @@ class StockSyncService:
             if end_date is None:
                 end_date = date.today()
 
+            # 根据策略过滤已存在的数据
+            existing_dates: Set[date] = set()
+            filtered_start_date = start_date
+
+            if strategy == SyncStrategy.SKIP:
+                # skip模式: 查询已存在的日期，完全跳过已存在的股票
+                existing_dates = await self.storage.get_existing_dates(
+                    'stock_daily', stock_code, 'trade_date'
+                )
+                if existing_dates:
+                    # 检查请求的日期范围内是否还有未同步的日期
+                    if start_date is None:
+                        # 无开始日期，检查是否有最新日期之外的数据需要同步
+                        latest_existing = max(existing_dates)
+                        if latest_existing >= end_date:
+                            self.mark_sync_end(stock_code, success=True)
+                            return {
+                                'stock_code': stock_code,
+                                'success_count': 0,
+                                'failed_count': 0,
+                                'skipped_count': 0,
+                                'status': 'success',
+                                'message': f'All dates already exist (latest: {latest_existing})',
+                                'strategy': strategy.value
+                            }
+                        # 继续同步，从最新日期之后开始
+                        filtered_start_date = date.fromordinal(latest_existing.toordinal() + 1)
+                    else:
+                        # 有开始日期，检查是否所有日期都已存在
+                        date_range_set = {
+                            start_date + timedelta(days=i)
+                            for i in range((end_date - start_date).days + 1)
+                        }
+                        if date_range_set.issubset(existing_dates):
+                            self.mark_sync_end(stock_code, success=True)
+                            return {
+                                'stock_code': stock_code,
+                                'success_count': 0,
+                                'failed_count': 0,
+                                'skipped_count': len(date_range_set),
+                                'status': 'success',
+                                'message': 'All dates already exist',
+                                'strategy': strategy.value
+                            }
+
             # 获取历史数据
             records = await self.data_source.get_daily(
                 stock_code=stock_code,
-                start_date=start_date or date(end_date.year - 3, end_date.month, end_date.day),
+                start_date=filtered_start_date or date(end_date.year - 3, end_date.month, end_date.day),
                 end_date=end_date,
                 adjust_type=adjust_type
             )
@@ -143,8 +206,22 @@ class StockSyncService:
                     'success_count': 0,
                     'failed_count': 0,
                     'status': 'success',
-                    'message': 'No data available'
+                    'message': 'No data available',
+                    'strategy': strategy.value
                 }
+
+            # 根据策略过滤已存在的日期
+            if strategy == SyncStrategy.INCREMENTAL:
+                if not existing_dates:
+                    existing_dates = await self.storage.get_existing_dates(
+                        'stock_daily', stock_code, 'trade_date'
+                    )
+                if existing_dates:
+                    original_count = len(records)
+                    records = [r for r in records if r.trade_date not in existing_dates]
+                    filtered_count = original_count - len(records)
+                    if filtered_count > 0:
+                        logger.info(f"{stock_code}: 过滤 {filtered_count} 条已存在的数据")
 
             # 质量校验
             quality_result = await self.quality_service.batch_validate(records)
@@ -155,6 +232,7 @@ class StockSyncService:
                 if flag == 'good'
             ]
 
+            inserted_count = 0
             if valid_records:
                 # 转换为字典格式
                 record_dicts = [r.model_dump() for r in valid_records]
@@ -162,17 +240,18 @@ class StockSyncService:
                 for d in record_dicts:
                     if 'trade_date' in d and isinstance(d['trade_date'], date):
                         d['trade_date'] = d['trade_date'].isoformat()
-                await self.storage.insert('stock_daily', record_dicts)
+                inserted_count = await self.storage.insert('stock_daily', record_dicts)
 
             self.mark_sync_end(stock_code, success=True)
 
             return {
                 'stock_code': stock_code,
                 'total_records': len(records),
-                'success_count': quality_result['passed'],
+                'success_count': inserted_count,
                 'failed_count': quality_result['failed'],
                 'status': 'success',
-                'quality_flags': quality_result['quality_flags']
+                'quality_flags': quality_result['quality_flags'],
+                'strategy': strategy.value
             }
 
         except BusinessError as e:

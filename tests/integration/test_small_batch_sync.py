@@ -69,7 +69,7 @@ class TestSmallBatchSync:
         # 记录同步前的数据量
         before_query = "SELECT count() as cnt FROM stock_daily WHERE stock_code = %(code)s"
         before_result = await components['storage'].query(before_query, {'code': stock_code})
-        before_count = before_result[0] if before_result else 0
+        before_count = before_result[0]['cnt'] if before_result else 0
 
         # 执行同步
         result = await sync_service.sync_single_stock(stock_code, start_date, end_date)
@@ -80,7 +80,7 @@ class TestSmallBatchSync:
 
         # 验证数据确实写入
         after_result = await components['storage'].query(before_query, {'code': stock_code})
-        after_count = after_result[0] if after_result else 0
+        after_count = after_result[0]['cnt'] if after_result else 0
         assert after_count > before_count
 
     @pytest.mark.asyncio

@@ -133,3 +133,43 @@ class TestClickHouseRepository:
         # 验证 __aenter__ 和 __aexit__ 存在
         assert hasattr(repo, '__aenter__')
         assert hasattr(repo, '__aexit__')
+
+    @pytest.mark.asyncio
+    async def test_get_existing_dates(self):
+        """测试获取股票已存在的日期集合"""
+        repo = ClickHouseRepository()
+        mock_client = Mock()
+        # query方法会调用client.execute并转换结果
+        mock_client.execute.return_value = (
+            [(date(2024, 1, 2),), (date(2024, 1, 3),), (date(2024, 1, 4),)],
+            [('trade_date', 'Date')]
+        )
+        repo._client = mock_client
+
+        result = await repo.get_existing_dates('stock_daily', '600000', 'trade_date')
+
+        assert isinstance(result, set)
+        assert len(result) == 3
+        assert date(2024, 1, 2) in result
+        assert date(2024, 1, 3) in result
+        assert date(2024, 1, 4) in result
+
+    @pytest.mark.asyncio
+    async def test_get_existing_dates_empty(self):
+        """测试获取空结果"""
+        repo = ClickHouseRepository()
+        mock_client = Mock()
+        mock_client.execute.return_value = [[], [('trade_date', 'Date')]]
+        repo._client = mock_client
+
+        result = await repo.get_existing_dates('stock_daily', '600000', 'trade_date')
+
+        assert result == set()
+
+    @pytest.mark.asyncio
+    async def test_get_existing_dates_invalid_table(self):
+        """测试无效表名"""
+        repo = ClickHouseRepository()
+        with pytest.raises(ValueError) as exc_info:
+            await repo.get_existing_dates('invalid_table', '600000', 'trade_date')
+        assert 'not in allowed tables list' in str(exc_info.value)
