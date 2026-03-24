@@ -311,6 +311,10 @@ class TestStockSyncServiceIntegration:
         # 模拟已有全部数据 (1/1 到 1/5)
         existing_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)}
         storage.get_existing_dates = AsyncMock(return_value=existing_dates)
+
+        # 模拟交易日历（假设这5天都是交易日）
+        trading_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)}
+        data_source.get_trading_dates = AsyncMock(return_value=trading_dates)
         data_source.get_daily = AsyncMock(return_value=[])
 
         service = StockSyncService(
@@ -342,6 +346,10 @@ class TestStockSyncServiceIntegration:
         # 已有最新日期
         existing_dates = {date(2024, 1, 3), date(2024, 1, 4)}
         storage.get_existing_dates = AsyncMock(return_value=existing_dates)
+
+        # 模拟交易日历
+        trading_dates = {date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)}
+        data_source.get_trading_dates = AsyncMock(return_value=trading_dates)
 
         mock_records = [
             StockDaily(
@@ -474,6 +482,10 @@ class TestStockSyncServiceIntegration:
         existing_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)}
         storage.get_existing_dates = AsyncMock(return_value=existing_dates)
 
+        # 模拟交易日历
+        trading_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)}
+        data_source.get_trading_dates = AsyncMock(return_value=trading_dates)
+
         service = StockSyncService(
             data_source=data_source,
             storage=storage,
@@ -507,6 +519,10 @@ class TestStockSyncServiceIntegration:
         existing_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)}
         storage.get_existing_dates = AsyncMock(return_value=existing_dates)
 
+        # 模拟交易日历
+        trading_dates = {date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)}
+        data_source.get_trading_dates = AsyncMock(return_value=trading_dates)
+
         service = StockSyncService(
             data_source=data_source,
             storage=storage,
@@ -539,6 +555,10 @@ class TestStockSyncServiceIntegration:
         # 已有最新日期到1月3日
         existing_dates = {date(2024, 1, 3)}
         storage.get_existing_dates = AsyncMock(return_value=existing_dates)
+
+        # 模拟交易日历（假设1月4日是交易日）
+        trading_dates = {date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)}
+        data_source.get_trading_dates = AsyncMock(return_value=trading_dates)
 
         # API返回1月4日的新数据
         mock_records = [
@@ -628,3 +648,65 @@ class TestStockSyncServiceIntegration:
 
         assert result['status'] == 'success'
         assert result['total'] == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_uses_trading_dates_filter(self):
+        """测试同步时使用交易日历过滤周末和节假日"""
+        data_source = Mock(spec=AkshareClient)
+        storage = Mock(spec=ClickHouseRepository)
+        quality_service = Mock(spec=QualityService)
+        report_service = Mock(spec=ReportService)
+
+        # 模拟数据库已有1月2日（周二）和1月3日（周三）
+        existing_dates = {date(2024, 1, 2), date(2024, 1, 3)}
+        storage.get_existing_dates = AsyncMock(return_value=existing_dates)
+
+        # 模拟交易日历（排除周末和元旦）
+        trading_dates = {
+            date(2024, 1, 2),  # 周二
+            date(2024, 1, 3),  # 周三
+            date(2024, 1, 4),  # 周四
+            date(2024, 1, 5),  # 周五
+        }
+        data_source.get_trading_dates = AsyncMock(return_value=trading_dates)
+
+        # 模拟API返回数据
+        mock_records = [
+            StockDaily(
+                stock_code='600000',
+                trade_date=date(2024, 1, 4),
+                open=10.0,
+                high=10.8,
+                low=9.9,
+                close=10.5,
+                volume=1000000,
+                data_source='test',
+                adjust_type='qfq',
+                is_adjusted=True
+            )
+        ]
+        data_source.get_daily = AsyncMock(return_value=mock_records)
+        storage.insert = AsyncMock(return_value=1)
+        quality_service.batch_validate = AsyncMock(return_value={
+            'total': 1, 'passed': 1, 'failed': 0, 'quality_flags': ['good']
+        })
+
+        service = StockSyncService(
+            data_source=data_source,
+            storage=storage,
+            quality_service=quality_service,
+            report_service=report_service
+        )
+
+        # 1月1日（周一，元旦）和1月6日（周六）、1月7日（周日）不应被计入
+        result = await service.sync_single_stock(
+            '600000',
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 7),
+            strategy=SyncStrategy.SKIP
+        )
+
+        # 交易日历应该被调用
+        data_source.get_trading_dates.assert_called_once()
+        # API应该被调用（因为1月4日、5日需要同步）
+        data_source.get_daily.assert_called_once()

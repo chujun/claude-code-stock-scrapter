@@ -4,9 +4,10 @@
 import asyncio
 import logging
 import math
+import threading
 import time
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import akshare as ak
 import pandas as pd
@@ -46,6 +47,11 @@ class AkshareClient(BaseDataSource):
         self.rate_limiter = RateLimiter(
             base_interval=self.settings.rate_limit.base_interval
         )
+        # 交易日历缓存（类级别，所有实例共享）
+        # 结构: (cached_dates_set, cache_date)
+        self._trading_dates_cache: Optional[Set[date]] = None
+        self._trading_dates_cache_date: Optional[date] = None
+        self._trading_lock = threading.Lock()
 
     async def close(self) -> None:
         """关闭客户端"""
@@ -514,3 +520,60 @@ class AkshareClient(BaseDataSource):
             return True
         except Exception:
             return False
+
+    async def get_trading_dates(
+        self,
+        start_date: date,
+        end_date: date
+    ) -> Set[date]:
+        """获取指定日期范围内的交易日集合（带缓存）
+
+        使用类级别缓存，每日更新一次。线程安全。
+
+        Args:
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            Set[date]: 交易日集合
+        """
+        today = date.today()
+
+        # 线程安全地检查和更新缓存
+        with self._trading_lock:
+            # 检查是否需要刷新缓存（新的一天）
+            if (self._trading_dates_cache is None or
+                self._trading_dates_cache_date != today):
+                try:
+                    await self.rate_limiter.wait()
+
+                    # 获取所有交易日历（从1990年开始）
+                    df = await self._run_sync(ak.tool_trade_date_hist_sina)
+
+                    if df is None or df.empty:
+                        return set()
+
+                    # 转换并缓存完整日期集合
+                    all_trading_dates = set()
+                    for trade_date in df['trade_date']:
+                        if isinstance(trade_date, str):
+                            d = datetime.strptime(trade_date, "%Y-%m-%d").date()
+                        elif hasattr(trade_date, 'date'):
+                            d = trade_date.date()
+                        else:
+                            d = trade_date
+                        all_trading_dates.add(d)
+
+                    self._trading_dates_cache = all_trading_dates
+                    self._trading_dates_cache_date = today
+                    logger.info(f"交易日历缓存已更新，共 {len(all_trading_dates)} 个交易日")
+
+                except Exception as e:
+                    logger.warning(f"Failed to get trading dates: {e}")
+                    return set()
+
+        # 从缓存中过滤指定范围（缓存已准备好，锁外操作）
+        return {
+            d for d in self._trading_dates_cache
+            if start_date <= d <= end_date
+        }

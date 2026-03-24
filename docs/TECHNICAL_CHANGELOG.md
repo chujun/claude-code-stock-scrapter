@@ -223,6 +223,45 @@ python scripts/full_batch_sync.py --strategy overwrite
 - `get_existing_dates()` 方法查询已存在的日期
 - `sync_single_stock()` 根据策略过滤数据
 
+### 优化：交易日历缓存与线程安全
+
+**问题**：每次调用 `get_trading_dates()` 都会请求新浪API获取完整交易日历，在批量同步时造成大量重复网络请求。
+
+**解决方案**：
+1. 引入类级别缓存 `self._trading_dates_cache`，缓存完整交易日历集合
+2. 使用 `threading.Lock()` 实现线程安全
+3. 缓存按日刷新（基于 `date.today()` 判断是否过期）
+4. 过滤逻辑在锁外执行，减少锁持有时间
+
+**技术实现**：
+```python
+# 交易日历缓存（类级别，所有实例共享）
+self._trading_dates_cache: Optional[Set[date]] = None
+self._trading_dates_cache_date: Optional[date] = None
+self._trading_lock = threading.Lock()
+
+async def get_trading_dates(self, start_date: date, end_date: date) -> Set[date]:
+    today = date.today()
+    with self._trading_lock:
+        if (self._trading_dates_cache is None or
+            self._trading_dates_cache_date != today):
+            # 从API获取完整日历并缓存
+            df = await self._run_sync(ak.tool_trade_date_hist_sina)
+            all_trading_dates = set()
+            # ... 转换逻辑
+            self._trading_dates_cache = all_trading_dates
+            self._trading_dates_cache_date = today
+    # 锁外过滤指定范围
+    return {d for d in self._trading_dates_cache if start_date <= d <= end_date}
+```
+
+**效果**：
+- 交易日历API调用从 O(n) 降为 O(1)，n=股票数量
+- 线程安全，支持多实例并发
+- 缓存自动按日刷新，保证数据新鲜度
+
+---
+
 ### 优化：SKIP/INCREMENTAL策略提前查询数据库
 
 **问题**：原实现中，INCREMENTAL策略会先调用第三方API获取数据，再在本地过滤已存在的日期，造成不必要的网络请求。

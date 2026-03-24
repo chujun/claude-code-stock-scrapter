@@ -363,3 +363,75 @@ class TestAkshareClient:
         client = AkshareClient()
         # AkshareClient不依赖session，直接验证close即可
         await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_trading_dates(self):
+        """测试获取交易日历"""
+        from data_source.akshare_client import AkshareClient
+        import pandas as pd
+
+        client = AkshareClient()
+        # 构造交易日历数据
+        mock_df = pd.DataFrame({
+            'trade_date': ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05']
+        })
+        with patch('akshare.tool_trade_date_hist_sina', return_value=mock_df):
+            result = await client.get_trading_dates(date(2024, 1, 1), date(2024, 1, 10))
+            assert isinstance(result, set)
+            assert len(result) == 4
+            assert date(2024, 1, 2) in result
+            assert date(2024, 1, 3) in result
+
+    @pytest.mark.asyncio
+    async def test_get_trading_dates_filters_by_range(self):
+        """测试获取指定日期范围的交易日"""
+        from data_source.akshare_client import AkshareClient
+        import pandas as pd
+
+        client = AkshareClient()
+        # 构造交易日历数据（包含范围外日期）
+        mock_df = pd.DataFrame({
+            'trade_date': ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08']
+        })
+        with patch('akshare.tool_trade_date_hist_sina', return_value=mock_df):
+            result = await client.get_trading_dates(date(2024, 1, 3), date(2024, 1, 6))
+            assert len(result) == 3
+            assert date(2024, 1, 3) in result
+            assert date(2024, 1, 4) in result
+            assert date(2024, 1, 5) in result
+            assert date(2024, 1, 2) not in result
+            assert date(2024, 1, 8) not in result
+
+    @pytest.mark.asyncio
+    async def test_get_trading_dates_caches_result(self):
+        """测试交易日历会缓存结果，避免重复调用API"""
+        from data_source.akshare_client import AkshareClient
+        import pandas as pd
+
+        client = AkshareClient()
+
+        # 清除缓存以确保测试隔离
+        client._trading_dates_cache = None
+
+        # 构造交易日历数据
+        mock_df = pd.DataFrame({
+            'trade_date': ['2024-01-02', '2024-01-03', '2024-01-04']
+        })
+
+        call_count = 0
+
+        def counting_mock():
+            nonlocal call_count
+            call_count += 1
+            return mock_df
+
+        with patch('akshare.tool_trade_date_hist_sina', side_effect=counting_mock):
+            # 第一次调用
+            result1 = await client.get_trading_dates(date(2024, 1, 1), date(2024, 1, 10))
+            # 第二次调用（应该使用缓存）
+            result2 = await client.get_trading_dates(date(2024, 1, 1), date(2024, 1, 10))
+
+            # 只应该调用1次API
+            assert call_count == 1
+            # 两次结果应该一致
+            assert result1 == result2

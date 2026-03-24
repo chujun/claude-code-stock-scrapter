@@ -2,7 +2,8 @@
 """数据源抽象基类"""
 
 from abc import ABC, abstractmethod
-from typing import List
+from datetime import date
+from typing import List, Set
 
 from models.stock_info import StockInfo
 from models.stock_daily import StockDaily
@@ -117,5 +118,22 @@ class BaseDataSource(ABC):
 
         Returns:
             dict: 包含财务指标的字典
+        """
+        pass
+
+    @abstractmethod
+    async def get_trading_dates(
+        self,
+        start_date: date,
+        end_date: date
+    ) -> Set[date]:
+        """获取指定日期范围内的交易日集合
+
+        Args:
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            Set[date]: 交易日集合
         """
         pass

@@ -152,14 +152,24 @@ class StockSyncService:
 
             # SKIP和INCREMENTAL策略都需要先检查数据库
             if strategy in (SyncStrategy.SKIP, SyncStrategy.INCREMENTAL):
+                # 获取交易日历（排除周末和节假日）
+                trading_dates = await self.data_source.get_trading_dates(
+                    start_date or date(end_date.year - 3, end_date.month, end_date.day),
+                    end_date
+                )
+
                 existing_dates = await self.storage.get_existing_dates(
                     'stock_daily', stock_code, 'trade_date'
                 )
-                if existing_dates:
+                if existing_dates and trading_dates:
+                    # 只比较交易日，排除周末和节假日
+                    missing_trading_dates = trading_dates - existing_dates
+
                     if start_date is None:
                         # 无开始日期，检查是否有最新日期之外的数据需要同步
                         latest_existing = max(existing_dates)
-                        if latest_existing >= end_date:
+                        latest_trading = max(trading_dates)
+                        if latest_existing >= latest_trading:
                             self.mark_sync_end(stock_code, success=True)
                             return {
                                 'stock_code': stock_code,
@@ -167,26 +177,22 @@ class StockSyncService:
                                 'failed_count': 0,
                                 'skipped_count': 0,
                                 'status': 'success',
-                                'message': f'All dates already exist (latest: {latest_existing})',
+                                'message': f'All trading dates already exist (latest: {latest_existing})',
                                 'strategy': strategy.value
                             }
                         # 继续同步，从最新日期之后开始
                         filtered_start_date = date.fromordinal(latest_existing.toordinal() + 1)
                     else:
-                        # 有开始日期，检查是否所有日期都已存在
-                        date_range_set = {
-                            start_date + timedelta(days=i)
-                            for i in range((end_date - start_date).days + 1)
-                        }
-                        if date_range_set.issubset(existing_dates):
+                        # 有开始日期，检查是否所有交易日都已存在
+                        if not missing_trading_dates:
                             self.mark_sync_end(stock_code, success=True)
                             return {
                                 'stock_code': stock_code,
                                 'success_count': 0,
                                 'failed_count': 0,
-                                'skipped_count': len(date_range_set),
+                                'skipped_count': len(trading_dates),
                                 'status': 'success',
-                                'message': 'All dates already exist',
+                                'message': 'All trading dates already exist',
                                 'strategy': strategy.value
                             }
 
