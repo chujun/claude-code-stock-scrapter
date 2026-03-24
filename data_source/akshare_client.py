@@ -150,6 +150,11 @@ class AkshareClient(BaseDataSource):
         try:
             await self.rate_limiter.wait()
 
+            # 北交所股票（920开头）暂不支持，跳过
+            if stock_code.startswith("920"):
+                log_api_response("stock_zh_a_hist_tx", stock_code, 0, records=0, error="北交所股票暂不支持")
+                return []
+
             # akshare的adjust参数映射
             adjust_map = {"qfq": "qfq", "hfq": "hfq", "none": ""}
             ak_adjust = adjust_map.get(adjust_type, "qfq")

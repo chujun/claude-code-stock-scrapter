@@ -15,9 +15,9 @@ class QualityService:
     提供涨跌幅、OHLC关系、字段完整性等校验功能
     """
 
-    # 涨跌幅阈值配置
-    NORMAL_CHANGE_LIMIT = 10.0  # 正常股票涨跌幅限制 ±10%
-    ST_CHANGE_LIMIT = 20.0      # ST股票涨跌幅限制 ±20%
+    # 涨跌幅阈值配置（覆盖涨停板±10%和ST股±20%的最大波动）
+    NORMAL_CHANGE_LIMIT = 20.0  # 正常股票涨跌幅限制 ±20%（覆盖涨停板）
+    ST_CHANGE_LIMIT = 25.0      # ST股票涨跌幅限制 ±25%
 
     def __init__(self, settings=None):
         """初始化质量服务
