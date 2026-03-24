@@ -12,7 +12,23 @@ from typing import List, Optional, Set
 import akshare as ak
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+# 创建专用logger用于API日志
+api_logger = logging.getLogger("stock-scraper.api")
+logger = logging.getLogger(__name__)  # 保留原logger用于内部日志
+
+def log_api_request(func_name: str, stock_code: str = None, **kwargs):
+    """记录API请求开始"""
+    params = ", ".join(f"{k}={v}" for k, v in kwargs.items() if v is not None)
+    target = f"{func_name}({stock_code})" if stock_code else func_name
+    api_logger.debug(f"[API REQUEST] {target} - {params}")
+
+def log_api_response(func_name: str, stock_code: str, duration: float, records: int = None, error: str = None):
+    """记录API响应结果"""
+    if error:
+        api_logger.warning(f"[API RESPONSE] {func_name}({stock_code}) - ERROR: {error} (耗时: {duration:.2f}s)")
+    else:
+        count = records if records is not None else 0
+        api_logger.info(f"[API RESPONSE] {func_name}({stock_code}) - OK, {count} 条记录 (耗时: {duration:.2f}s)")
 
 from data_source.base import BaseDataSource
 from data_source.exceptions import (
@@ -77,8 +93,11 @@ class AkshareClient(BaseDataSource):
         try:
             await self.rate_limiter.wait()
 
-            # 使用akshare获取股票列表
+            log_api_request("stock_info_a_code_name")
+
+            start_time = time.time()
             df = await self._run_sync(ak.stock_info_a_code_name)
+            duration = time.time() - start_time
 
             stocks = []
             for _, row in df.iterrows():
@@ -90,6 +109,7 @@ class AkshareClient(BaseDataSource):
                 )
                 stocks.append(stock)
 
+            log_api_response("stock_info_a_code_name", stock_code=None, duration=duration, records=len(stocks))
             return stocks
         except BusinessError:
             raise
@@ -137,6 +157,13 @@ class AkshareClient(BaseDataSource):
             # 使用腾讯数据源获取日线数据 (eastmoney被代理屏蔽)
             # 腾讯接口需要带市场前缀
             symbol_with_prefix = f"sh{stock_code}" if stock_code.startswith(("6", "9")) else f"sz{stock_code}"
+
+            log_api_request("stock_zh_a_hist_tx", stock_code,
+                          start=start_date.strftime("%Y%m%d"),
+                          end=end_date.strftime("%Y%m%d"),
+                          adjust=ak_adjust)
+
+            start_time = time.time()
             df = await self._run_sync(
                 ak.stock_zh_a_hist_tx,
                 symbol=symbol_with_prefix,
@@ -144,11 +171,14 @@ class AkshareClient(BaseDataSource):
                 end_date=end_date.strftime("%Y%m%d"),
                 adjust=ak_adjust
             )
+            duration = time.time() - start_time
 
             if df is None or df.empty:
+                log_api_response("stock_zh_a_hist_tx", stock_code, duration, records=0)
                 return []
 
             daily_list = []
+            dates_processed = []
             for _, row in df.iterrows():
                 # 处理日期 (腾讯数据源使用 'date')
                 trade_date = row.get('date')
@@ -156,6 +186,8 @@ class AkshareClient(BaseDataSource):
                     trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
                 elif hasattr(trade_date, 'date'):
                     trade_date = trade_date.date()
+
+                dates_processed.append(trade_date)
 
                 # 计算涨跌幅 (腾讯数据源不直接提供，通过前后收盘价计算)
                 close = float(row.get('close', 0))
@@ -186,10 +218,13 @@ class AkshareClient(BaseDataSource):
                 )
                 daily_list.append(daily)
 
+            log_api_response("stock_zh_a_hist_tx", stock_code, duration, records=len(daily_list))
             return daily_list
         except BusinessError:
             raise
         except Exception as e:
+            duration = time.time() - start_time if 'start_time' in dir() else 0
+            log_api_response("stock_zh_a_hist_tx", stock_code, duration, error=str(e))
             raise NetworkError(f"Failed to get daily data for {stock_code}: {str(e)}")
 
     async def get_index(

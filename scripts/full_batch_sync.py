@@ -8,6 +8,7 @@ import asyncio
 import sys
 import time
 import logging
+import logging.handlers
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -19,11 +20,62 @@ from services.quality_service import QualityService
 from services.sync_service import StockSyncService, SyncStrategy
 from config.settings import get_settings
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+# 配置日志 - 输出到/data路径，包含应用名称，支持日志滚动
+APP_NAME = "stock-scraper"
+log_dir = Path("/data/logs") / APP_NAME
+log_dir.mkdir(parents=True, exist_ok=True)
+
+# 主日志格式
+main_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# 文件日志 - 同步进度日志（支持滚动）
+progress_file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename=log_dir / "sync.log",
+    when="midnight",
+    interval=1,
+    backupCount=7,
+    encoding="utf-8"
 )
+progress_file_handler.setFormatter(main_formatter)
+progress_file_handler.setLevel(logging.INFO)
+
+# 详细日志 - API请求/响应和每日期同步详情（单独文件）
+detail_file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename=log_dir / "detail.log",
+    when="midnight",
+    interval=1,
+    backupCount=7,
+    encoding="utf-8"
+)
+detail_file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+))
+detail_file_handler.setLevel(logging.INFO)
+
+# 控制台日志 - 进度显示
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(
+    '\r%(asctime)s - %(message)s'
+))
+
+# 配置根日志
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers.clear()
+root_logger.addHandler(progress_file_handler)
+root_logger.addHandler(console_handler)
+
+# 配置详细日志logger（API和每日期详情）
+detail_logger = logging.getLogger("stock-scraper.detail")
+detail_logger.setLevel(logging.INFO)
+detail_logger.addHandler(detail_file_handler)
+
+# 配置API日志logger
+api_logger = logging.getLogger("stock-scraper.api")
+api_logger.setLevel(logging.INFO)
+api_logger.addHandler(detail_file_handler)
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +121,19 @@ class FullBatchSync:
                 end_date=self.end_date,
                 strategy=self.strategy
             )
+
+            # 记录每只股票同步结果到主日志
+            if result.get('status') == 'success':
+                total = result.get('total_records', 0)
+                inserted = result.get('success_count', 0)
+                failed = result.get('failed_count', 0)
+                if inserted > 0:
+                    logger.info(f"[{stock_code}] 同步成功: {inserted}/{total} 条 (失败: {failed})")
+                else:
+                    logger.info(f"[{stock_code}] 无新数据: {result.get('message', 'skipped')}")
+            else:
+                logger.error(f"[{stock_code}] 同步失败: {result.get('error', 'Unknown error')}")
+
             return {
                 'code': stock_code,
                 'success_count': result.get('success_count', 0),
@@ -76,6 +141,7 @@ class FullBatchSync:
                 'status': 'success'
             }
         except Exception as e:
+            logger.error(f"[{stock_code}] 同步异常: {type(e).__name__}: {str(e)}")
             return {
                 'code': stock_code,
                 'success': 0,

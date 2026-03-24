@@ -31,7 +31,7 @@ scheduler:
 
 report:
   output_dir: "reports"
-  alert_file: "logs/alerts.log"
+  alert_file: "/data/logs/alerts.log"
   alert_threshold:
     error_rate: 0.05  # 错误率超过5%告警
     consecutive_failures: 10  # 连续失败10次告警

@@ -194,7 +194,169 @@
 
 ---
 
+## v1.4 (2026-03-24)
+
+### 优化：日志系统重构
+
+#### 问题
+- 磁盘空间不足导致同步中断
+- 日志输出到根目录 `/var/log/`，占用系统空间
+- 日志无滚动机制，单文件无限增长
+
+#### 解决方案
+
+**1. 日志路径迁移至 /data**
+
+| 组件 | 原路径 | 新路径 |
+|------|--------|--------|
+| 同步脚本日志 | `stock-scraper/logs/sync.log` | `/data/logs/stock-scraper/sync.log` |
+| 告警日志 | `logs/alerts.log` | `/data/logs/alerts.log` |
+| ClickHouse日志 | `/var/log/clickhouse-server/` | `/data/logs/clickhouse/` |
+
+**2. 日志文件结构**
+
+```
+/data/logs/
+├── stock-scraper/          # 应用日志
+│   ├── sync.log          # 主日志（进度、每只股票结果、异常）
+│   ├── detail.log        # 详细日志（API请求/响应、每日期详情）
+│   └── console.log       # 控制台输出
+└── clickhouse/            # ClickHouse日志
+    ├── clickhouse-server.log
+    └── clickhouse-server.err.log
+```
+
+**3. 日志滚动配置**
+
+| 配置项 | 值 |
+|--------|-----|
+| 滚动时机 | 每天午夜 (midnight) |
+| 保留天数 | 7 天 |
+| 编码 | utf-8 |
+
+**4. 日志级别**
+
+| Logger | 级别 | 内容 |
+|--------|------|------|
+| stock-scraper (主) | INFO | 进度、每只股票结果、异常 |
+| stock-scraper.detail | INFO | API请求/响应、每日期同步详情 |
+| stock-scraper.api | INFO | API调用耗时和响应 |
+
+**5. 日志输出内容示例**
+
+`sync.log` - 每只股票同步结果：
+```
+2026-03-24 09:22:14 - INFO - [000001] 同步成功: 21/21 条 (失败: 0)
+2026-03-24 09:22:14 - INFO - [000070] ! 2026-03-02: error (close=19.66, change=10.02%)
+2026-03-24 09:22:14 - INFO - 进度: 50/5491 (0.9%) | 成功: 32 | 失败: 0 | 跳过: 18
+```
+
+`detail.log` - API响应和每日期详情：
+```
+2026-03-24 09:22:14 - stock-scraper.api - INFO - [API RESPONSE] stock_zh_a_hist_tx(000096) - OK, 21 条记录 (耗时: 1.15s)
+2026-03-24 09:22:14 - stock-scraper.detail - INFO - [000096] 同步完成: 总21条, 有效19条, 质量不合格2条, 策略:skip
+```
+
+#### ClickHouse 日志优化
+
+**问题**：ClickHouse 日志级别为 `trace`，产生大量日志（>1000万行），且写入 `/var/log/syslog`。
+
+**解决**：创建自定义配置 `/etc/clickhouse-server/config.d/custom-log.xml`：
+```xml
+<clickhouse>
+    <logger>
+        <level>information</level>
+        <log>/data/logs/clickhouse/clickhouse-server.log</log>
+        <errorlog>/data/logs/clickhouse/clickhouse-server.err.log</errorlog>
+        <size>1000M</size>
+        <count>10</count>
+    </logger>
+</clickhouse>
+```
+
+**效果**：
+- 日志级别从 `trace` 降为 `information`
+- 日志产生速度从 ~200KB/s 降为 ~2KB/s
+- 日志路径迁移至 `/data`
+
+#### 相关文件变更
+
+| 文件 | 变更内容 |
+|------|----------|
+| `scripts/full_batch_sync.py` | 日志路径、滚动、多logger配置 |
+| `config/settings.py` | alert_file路径修改 |
+| `config.yaml` | alert_file路径修改 |
+| `/etc/clickhouse-server/config.d/custom-log.xml` | ClickHouse日志配置 |
+
+#### 查看日志命令
+
+```bash
+# 查看同步进度
+tail -1 /data/logs/stock-scraper/sync.log
+
+# 实时监控（每10秒刷新）
+watch -n 10 "tail -1 /data/logs/stock-scraper/sync.log"
+
+# 查看API日志
+tail -20 /data/logs/stock-scraper/detail.log
+
+# 查看ClickHouse日志
+tail -20 /data/logs/clickhouse/clickhouse-server.log
+```
+
+---
+
 ## v1.3 (2026-03-24)
+
+### 同步进度监控（2026-03-24）
+
+#### 同步概况
+
+| 指标 | 值 |
+|------|-----|
+| 监控时间 | 2026-03-24 |
+| 股票总数 | 4,419 |
+| 总记录数 | 99,486 |
+| 最新数据日期 | 2026-03-23 |
+| 数据质量 | 100% good |
+| 复权类型 | 100% qfq (前复权) |
+
+#### 同步速率统计
+
+| 指标 | 值 |
+|------|-----|
+| 平均速率 | ~17 条/秒 (~1,040 条/分钟) |
+| 波动范围 | 239 ~ 374 条/次 |
+| 稳定性 | 高（波动仅±8%） |
+
+#### 各日期数据分布
+
+| 日期 | 记录数 | 股票数 | 完成度 |
+|------|--------|--------|--------|
+| 2026-03-23 | 4,953 | 4,338 | 99.3% |
+| 2026-03-20 | 4,995 | 4,373 | 100% |
+| 2026-03-19 | 5,001 | 4,379 | 100% |
+| 2026-03-18 | 4,973 | 4,356 | 100% |
+| 2026-03-17 | 4,996 | 4,376 | 100% |
+
+#### 监控数据（两次监控对比）
+
+| 监控时间点 | 记录数 | 当次增量 | 累计增量 |
+|------------|--------|----------|----------|
+| 第一次监控-初始 | 90,674 | - | - |
+| 第一次监控-#10 | 93,384 | +2,710 | +2,710 |
+| 第二次监控-初始 | 96,878 | - | - |
+| 第二次监控-#10 | 99,486 | +2,608 | +2,608 |
+
+**两次监控总增量**: 6,102 条记录（间隔约3分钟）
+
+#### 结论
+
+1. 同步稳定进行，速率保持在 17条/秒 左右
+2. 2026-03-23 数据同步进度 99.3%，预计 1~2 分钟内完成
+3. 2026-03-20 以来历史数据均已完成同步
+
+---
 
 ### 新增功能：同步策略支持
 

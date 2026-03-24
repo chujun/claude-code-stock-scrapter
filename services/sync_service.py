@@ -17,6 +17,9 @@ from services.exceptions import BusinessError
 
 logger = logging.getLogger(__name__)
 
+# 创建详细日志logger
+detail_logger = logging.getLogger("stock-scraper.detail")
+
 
 class SyncStrategy(str, Enum):
     """同步策略枚举
@@ -197,6 +200,8 @@ class StockSyncService:
                             }
 
             # 获取历史数据
+            detail_logger.info(f"[{stock_code}] 开始获取日线数据: {filtered_start_date or date(end_date.year - 3, end_date.month, end_date.day)} ~ {end_date}")
+
             records = await self.data_source.get_daily(
                 stock_code=stock_code,
                 start_date=filtered_start_date or date(end_date.year - 3, end_date.month, end_date.day),
@@ -205,11 +210,13 @@ class StockSyncService:
             )
 
             if not records:
+                detail_logger.warning(f"[{stock_code}] API返回空数据")
                 self.mark_sync_end(stock_code, success=True)
                 return {
                     'stock_code': stock_code,
                     'success_count': 0,
                     'failed_count': 0,
+                    'skipped_count': 0,
                     'status': 'success',
                     'message': 'No data available',
                     'strategy': strategy.value
@@ -227,9 +234,17 @@ class StockSyncService:
                     filtered_count = original_count - len(records)
                     if filtered_count > 0:
                         logger.info(f"{stock_code}: 过滤 {filtered_count} 条已存在的数据")
+                        detail_logger.info(f"[{stock_code}] 过滤 {filtered_count} 条已存在数据，剩余 {len(records)} 条")
 
             # 质量校验
             quality_result = await self.quality_service.batch_validate(records)
+
+            # 记录每条数据的质量状态
+            for record, flag in zip(records, quality_result['quality_flags']):
+                if flag == 'good':
+                    detail_logger.debug(f"[{stock_code}] + {record.trade_date}: OK (close={record.close}, change={record.change_pct:.2f}%)")
+                else:
+                    detail_logger.warning(f"[{stock_code}] ! {record.trade_date}: {flag} (close={record.close}, change={record.change_pct:.2f}%)")
 
             # 只插入通过校验的数据
             valid_records = [
@@ -249,6 +264,9 @@ class StockSyncService:
 
             self.mark_sync_end(stock_code, success=True)
 
+            # 记录股票同步结果摘要
+            detail_logger.info(f"[{stock_code}] 同步完成: 总{len(records)}条, 有效{inserted_count}条, 质量不合格{quality_result['failed']}条, 策略:{strategy.value}")
+
             return {
                 'stock_code': stock_code,
                 'total_records': len(records),
@@ -260,6 +278,7 @@ class StockSyncService:
             }
 
         except BusinessError as e:
+            detail_logger.error(f"[{stock_code}] 业务异常: {str(e)}")
             self.mark_sync_end(stock_code, success=False)
             if stock_code in self._sync_status:
                 self._sync_status[stock_code]['errors'].append(str(e))
@@ -271,6 +290,7 @@ class StockSyncService:
                 'error': str(e)
             }
         except Exception as e:
+            detail_logger.error(f"[{stock_code}] 系统异常: {type(e).__name__}: {str(e)}", exc_info=True)
             self.mark_sync_end(stock_code, success=False)
             if stock_code in self._sync_status:
                 self._sync_status[stock_code]['errors'].append(str(e))

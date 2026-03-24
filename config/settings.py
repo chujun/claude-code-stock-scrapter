@@ -61,7 +61,7 @@ class AlertThresholdSettings(BaseSettings):
 class ReportSettings(BaseSettings):
     """报告配置"""
     output_dir: str = "reports"
-    alert_file: str = "logs/alerts.log"
+    alert_file: str = "/data/logs/alerts.log"
     alert_threshold: AlertThresholdSettings = AlertThresholdSettings()
 
 
