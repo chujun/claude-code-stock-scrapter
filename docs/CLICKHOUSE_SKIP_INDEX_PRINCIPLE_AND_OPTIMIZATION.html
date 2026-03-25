@@ -1,0 +1,1594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClickHouse 稀疏索引与跳数索引原理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        /* ===========================================
+           MANDATORY VIEWPORT FITTING BASE
+           =========================================== */
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-snap-type: y mandatory;
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: #0a0e1a;
+            color: #e0e6ed;
+            overflow-x: hidden;
+        }
+
+        .slide {
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+            scroll-snap-align: start;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .slide-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: clamp(1rem, 4vw, 4rem);
+            max-height: 100%;
+            overflow: hidden;
+        }
+
+        :root {
+            --cyan: #00f0ff;
+            --magenta: #ff00ff;
+            --blue: #0066ff;
+            --dark-bg: #0a0e1a;
+            --card-bg: rgba(0, 40, 80, 0.4);
+            --text-primary: #ffffff;
+            --text-secondary: #8892b0;
+            --glow-cyan: 0 0 20px rgba(0, 240, 255, 0.5), 0 0 40px rgba(0, 240, 255, 0.3);
+            --glow-magenta: 0 0 20px rgba(255, 0, 255, 0.5), 0 0 40px rgba(255, 0, 255, 0.3);
+            --title-size: clamp(1.5rem, 5vw, 4rem);
+            --h2-size: clamp(1.25rem, 3.5vw, 2.5rem);
+            --h3-size: clamp(1rem, 2.5vw, 1.75rem);
+            --body-size: clamp(0.75rem, 1.5vw, 1.125rem);
+            --small-size: clamp(0.65rem, 1vw, 0.875rem);
+            --slide-padding: clamp(1rem, 4vw, 4rem);
+        }
+
+        /* ===========================================
+           NEON CYBER THEME
+           =========================================== */
+        .slide {
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a1a2e 50%, #0a0e1a 100%);
+        }
+
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(ellipse at 20% 80%, rgba(0, 240, 255, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(255, 0, 255, 0.06) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        /* Grid overlay */
+        .slide::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            pointer-events: none;
+            animation: gridPulse 4s ease-in-out infinite;
+        }
+
+        @keyframes gridPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        /* ===========================================
+           TYPOGRAPHY
+           =========================================== */
+        h1 {
+            font-size: var(--title-size);
+            font-weight: 700;
+            color: var(--text-primary);
+            text-align: center;
+            text-shadow: var(--glow-cyan);
+            letter-spacing: -0.02em;
+            margin-bottom: 0.5em;
+        }
+
+        h2 {
+            font-size: var(--h2-size);
+            font-weight: 700;
+            color: var(--cyan);
+            text-shadow: var(--glow-cyan);
+            margin-bottom: 1em;
+            text-align: center;
+        }
+
+        h3 {
+            font-size: var(--h3-size);
+            font-weight: 500;
+            color: var(--magenta);
+            margin-bottom: 0.5em;
+        }
+
+        p, li {
+            font-size: var(--body-size);
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .subtitle {
+            font-size: var(--h3-size);
+            color: var(--text-secondary);
+            text-align: center;
+            margin-bottom: 2em;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 0.3em 0.8em;
+            background: var(--card-bg);
+            border: 1px solid var(--cyan);
+            border-radius: 4px;
+            color: var(--cyan);
+            font-size: var(--small-size);
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: var(--small-size);
+            background: rgba(0, 0, 0, 0.4);
+            padding: 0.2em 0.5em;
+            border-radius: 4px;
+            color: var(--cyan);
+            border: 1px solid rgba(0, 240, 255, 0.2);
+        }
+
+        /* ===========================================
+           ANIMATIONS
+           =========================================== */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-60px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeInRight {
+            from {
+                opacity: 0;
+                transform: translateX(60px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes scaleIn {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes glowPulse {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(0, 240, 255, 0.3), 0 0 40px rgba(0, 240, 255, 0.1);
+            }
+            50% {
+                box-shadow: 0 0 30px rgba(0, 240, 255, 0.6), 0 0 60px rgba(0, 240, 255, 0.3);
+            }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-15px); }
+        }
+
+        @keyframes scanline {
+            0% { top: -10%; }
+            100% { top: 110%; }
+        }
+
+        @keyframes particleFloat {
+            0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+            50% { transform: translate(var(--tx, 20px), var(--ty, -30px)) scale(1.2); opacity: 1; }
+        }
+
+        @keyframes typing {
+            from { width: 0; }
+            to { width: 100%; }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        @keyframes borderGlow {
+            0%, 100% { border-color: rgba(0, 240, 255, 0.3); }
+            50% { border-color: rgba(0, 240, 255, 0.8); }
+        }
+
+        @keyframes dataFlow {
+            0% { transform: translateX(-100%); opacity: 0; }
+            20% { opacity: 1; }
+            80% { opacity: 1; }
+            100% { transform: translateX(100%); opacity: 0; }
+        }
+
+        @keyframes slideInFromLeft {
+            0% { transform: translateX(-100%); opacity: 0; }
+            100% { transform: translateX(0); opacity: 1; }
+        }
+
+        @keyframes highlightPulse {
+            0%, 100% { background: rgba(0, 240, 255, 0.1); }
+            50% { background: rgba(0, 240, 255, 0.3); }
+        }
+
+        @keyframes countUp {
+            from { opacity: 0; transform: scale(0.5); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .animate-in {
+            opacity: 0;
+        }
+
+        .slide.active .animate-in {
+            animation: fadeInUp 0.8s ease-out forwards;
+        }
+
+        .slide.active .animate-in:nth-child(1) { animation-delay: 0.1s; }
+        .slide.active .animate-in:nth-child(2) { animation-delay: 0.2s; }
+        .slide.active .animate-in:nth-child(3) { animation-delay: 0.3s; }
+        .slide.active .animate-in:nth-child(4) { animation-delay: 0.4s; }
+        .slide.active .animate-in:nth-child(5) { animation-delay: 0.5s; }
+        .slide.active .animate-in:nth-child(6) { animation-delay: 0.6s; }
+
+        .animate-left {
+            opacity: 0;
+        }
+
+        .slide.active .animate-left {
+            animation: fadeInLeft 0.8s ease-out forwards;
+        }
+
+        .animate-right {
+            opacity: 0;
+        }
+
+        .slide.active .animate-right {
+            animation: fadeInRight 0.8s ease-out forwards;
+        }
+
+        .animate-scale {
+            opacity: 0;
+        }
+
+        .slide.active .animate-scale {
+            animation: scaleIn 0.6s ease-out forwards;
+        }
+
+        .slide.active .animate-scale:nth-child(1) { animation-delay: 0.2s; }
+        .slide.active .animate-scale:nth-child(2) { animation-delay: 0.4s; }
+        .slide.active .animate-scale:nth-child(3) { animation-delay: 0.6s; }
+
+        /* ===========================================
+           PARTICLES
+           =========================================== */
+        .particles {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: var(--cyan);
+            border-radius: 50%;
+            animation: particleFloat 6s ease-in-out infinite;
+        }
+
+        .particle:nth-child(1) { left: 10%; top: 20%; --tx: 30px; --ty: -40px; animation-delay: 0s; }
+        .particle:nth-child(2) { left: 25%; top: 60%; --tx: -20px; --ty: -30px; animation-delay: 1s; background: var(--magenta); }
+        .particle:nth-child(3) { left: 45%; top: 30%; --tx: 40px; --ty: 20px; animation-delay: 2s; }
+        .particle:nth-child(4) { left: 65%; top: 70%; --tx: -30px; --ty: -50px; animation-delay: 0.5s; background: var(--magenta); }
+        .particle:nth-child(5) { left: 80%; top: 25%; --tx: 20px; --ty: 30px; animation-delay: 1.5s; }
+        .particle:nth-child(6) { left: 90%; top: 55%; --tx: -40px; --ty: -20px; animation-delay: 2.5s; background: var(--magenta); }
+        .particle:nth-child(7) { left: 15%; top: 85%; --tx: 50px; --ty: 10px; animation-delay: 3s; }
+        .particle:nth-child(8) { left: 55%; top: 15%; --tx: -10px; --ty: 40px; animation-delay: 3.5s; background: var(--magenta); }
+
+        /* ===========================================
+           CARDS & CONTAINERS
+           =========================================== */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            border-radius: 12px;
+            padding: clamp(1rem, 2vw, 2rem);
+            backdrop-filter: blur(10px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+            animation: borderGlow 2s ease-in-out infinite;
+        }
+
+        .card-glow {
+            animation: glowPulse 3s ease-in-out infinite;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: clamp(1rem, 2vw, 2rem);
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: clamp(0.5rem, 1.5vw, 1.5rem);
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* ===========================================
+           CODE BLOCKS
+           =========================================== */
+        .code-block {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(0, 240, 255, 0.2);
+            border-radius: 8px;
+            padding: clamp(0.8rem, 1.5vw, 1.5rem);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: var(--small-size);
+            color: #e0e6ed;
+            overflow-x: auto;
+            width: 100%;
+            max-width: 900px;
+            position: relative;
+        }
+
+        .code-block::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(180deg, rgba(0, 240, 255, 0.03) 0%, transparent 100%);
+            pointer-events: none;
+        }
+
+        .code-block .keyword { color: var(--magenta); }
+        .code-block .string { color: #98c379; }
+        .code-block .comment { color: #5c6370; font-style: italic; }
+        .code-block .number { color: #d19a66; }
+        .code-block .function { color: var(--cyan); }
+
+        /* ===========================================
+           COMPARISON DIAGRAM
+           =========================================== */
+        .comparison-container {
+            display: flex;
+            gap: clamp(2rem, 4vw, 4rem);
+            align-items: flex-start;
+            justify-content: center;
+            flex-wrap: wrap;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .comparison-box {
+            flex: 1;
+            min-width: 280px;
+            max-width: 450px;
+        }
+
+        .comparison-box h3 {
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+
+        .vs-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: var(--h3-size);
+            font-weight: 700;
+            color: var(--magenta);
+            text-shadow: var(--glow-magenta);
+            padding: 1rem;
+        }
+
+        /* ===========================================
+           DATA FLOW VISUALIZATION
+           =========================================== */
+        .flow-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: clamp(0.5rem, 1.5vw, 1rem);
+            flex-wrap: wrap;
+            margin: 1rem 0;
+        }
+
+        .flow-box {
+            background: var(--card-bg);
+            border: 2px solid var(--cyan);
+            border-radius: 8px;
+            padding: clamp(0.5rem, 1vw, 1rem) clamp(0.8rem, 1.5vw, 1.5rem);
+            text-align: center;
+            position: relative;
+            min-width: 120px;
+            transition: all 0.3s ease;
+        }
+
+        .flow-box:hover {
+            transform: scale(1.05);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .flow-arrow {
+            color: var(--cyan);
+            font-size: var(--h2-size);
+            animation: fadeInRight 0.5s ease-out;
+        }
+
+        .flow-arrow-left {
+            animation: fadeInLeft 0.5s ease-out;
+        }
+
+        /* ===========================================
+           GRANULE VISUALIZATION
+           =========================================== */
+        .granule-container {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
+            max-width: 900px;
+        }
+
+        .granule-row {
+            display: flex;
+            gap: 0.3rem;
+            align-items: center;
+        }
+
+        .granule {
+            background: rgba(0, 102, 255, 0.2);
+            border: 1px solid rgba(0, 102, 255, 0.4);
+            border-radius: 4px;
+            padding: clamp(0.3rem, 0.8vw, 0.6rem);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: clamp(0.5rem, 1vw, 0.7rem);
+            color: var(--text-secondary);
+            transition: all 0.3s ease;
+            flex: 1;
+            text-align: center;
+        }
+
+        .granule.highlight {
+            background: rgba(0, 240, 255, 0.3);
+            border-color: var(--cyan);
+            color: var(--cyan);
+            box-shadow: var(--glow-cyan);
+            animation: highlightPulse 1s ease-in-out infinite;
+        }
+
+        .granule-label {
+            font-size: var(--small-size);
+            color: var(--text-secondary);
+            width: 60px;
+            flex-shrink: 0;
+        }
+
+        /* ===========================================
+           STATS DISPLAY
+           =========================================== */
+        .stats-row {
+            display: flex;
+            gap: clamp(1rem, 3vw, 3rem);
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 1.5rem 0;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: var(--title-size);
+            font-weight: 700;
+            color: var(--cyan);
+            text-shadow: var(--glow-cyan);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .stat-value.magenta {
+            color: var(--magenta);
+            text-shadow: var(--glow-magenta);
+        }
+
+        .stat-label {
+            font-size: var(--small-size);
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        /* ===========================================
+           INDEX TYPE CARDS
+           =========================================== */
+        .index-type-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            border-radius: 12px;
+            padding: clamp(1rem, 2vw, 1.5rem);
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .index-type-card:hover {
+            transform: translateY(-5px);
+            box-shadow: var(--glow-cyan);
+            border-color: var(--cyan);
+        }
+
+        .index-type-card h4 {
+            color: var(--cyan);
+            font-size: var(--h3-size);
+            margin-bottom: 0.5rem;
+        }
+
+        .index-type-card p {
+            font-size: var(--small-size);
+        }
+
+        /* ===========================================
+           PROGRESS INDICATOR
+           =========================================== */
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--cyan), var(--magenta));
+            z-index: 1000;
+            transition: width 0.3s ease;
+        }
+
+        .slide-counter {
+            position: fixed;
+            bottom: clamp(1rem, 2vw, 2rem);
+            right: clamp(1rem, 2vw, 2rem);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: var(--small-size);
+            color: var(--text-secondary);
+            z-index: 1000;
+            background: var(--card-bg);
+            padding: 0.5em 1em;
+            border-radius: 4px;
+            border: 1px solid rgba(0, 240, 255, 0.2);
+        }
+
+        .nav-dots {
+            position: fixed;
+            right: clamp(1rem, 2vw, 2rem);
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 1000;
+        }
+
+        .nav-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(0, 240, 255, 0.2);
+            border: 1px solid rgba(0, 240, 255, 0.4);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .nav-dot.active {
+            background: var(--cyan);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .keyboard-hint {
+            position: fixed;
+            bottom: clamp(1rem, 2vw, 2rem);
+            left: clamp(1rem, 2vw, 2rem);
+            font-size: var(--small-size);
+            color: var(--text-secondary);
+            z-index: 1000;
+            display: flex;
+            gap: 1rem;
+        }
+
+        .keyboard-hint kbd {
+            background: var(--card-bg);
+            padding: 0.2em 0.5em;
+            border-radius: 4px;
+            border: 1px solid rgba(0, 240, 255, 0.2);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* ===========================================
+           TITLE SLIDE SPECIAL
+           =========================================== */
+        .title-slide h1 {
+            font-size: clamp(2rem, 6vw, 4.5rem);
+            background: linear-gradient(135deg, var(--cyan) 0%, var(--magenta) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: none;
+        }
+
+        .title-slide .subtitle {
+            font-size: var(--h2-size);
+            color: var(--text-secondary);
+        }
+
+        .scanline {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 10%;
+            background: linear-gradient(180deg, transparent, rgba(0, 240, 255, 0.1), transparent);
+            animation: scanline 3s linear infinite;
+            pointer-events: none;
+        }
+
+        /* ===========================================
+           QUOTE / CALLOUT
+           =========================================== */
+        .callout {
+            background: linear-gradient(135deg, rgba(255, 0, 255, 0.1), rgba(0, 240, 255, 0.1));
+            border-left: 4px solid var(--cyan);
+            padding: clamp(1rem, 2vw, 1.5rem);
+            border-radius: 0 8px 8px 0;
+            max-width: 800px;
+            margin: 1rem auto;
+        }
+
+        .callout p {
+            color: var(--text-primary);
+            font-style: italic;
+        }
+
+        /* ===========================================
+           LIST STYLES
+           =========================================== */
+        .feature-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: clamp(0.5rem, 1.5vh, 1rem);
+            width: 100%;
+            max-width: 800px;
+        }
+
+        .feature-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            font-size: var(--body-size);
+            padding: clamp(0.5rem, 1vw, 1rem);
+            background: var(--card-bg);
+            border-radius: 8px;
+            border: 1px solid rgba(0, 240, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .feature-list li:hover {
+            border-color: rgba(0, 240, 255, 0.4);
+            transform: translateX(5px);
+        }
+
+        .feature-list li::before {
+            content: '▸';
+            color: var(--cyan);
+            font-size: var(--body-size);
+            flex-shrink: 0;
+        }
+
+        /* ===========================================
+           REDUCED MOTION
+           =========================================== */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.2s !important;
+            }
+            html {
+                scroll-behavior: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Progress Bar -->
+    <div class="progress-bar" id="progressBar"></div>
+
+    <!-- Slide Counter -->
+    <div class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">15</span></div>
+
+    <!-- Navigation Dots -->
+    <nav class="nav-dots" id="navDots"></nav>
+
+    <!-- Keyboard Hint -->
+    <div class="keyboard-hint">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 导航</span>
+        <span><kbd>Space</kbd> 下一页</span>
+    </div>
+
+    <!-- ===========================================
+         SLIDE 1: TITLE
+         =========================================== -->
+    <section class="slide title-slide active" data-slide="1">
+        <div class="scanline"></div>
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h1 class="animate-in">ClickHouse 稀疏索引与跳数索引</h1>
+            <p class="subtitle animate-in">原理详解 · 实战优化 · 与MySQL对比</p>
+            <div class="animate-in" style="margin-top: 2rem;">
+                <span class="tag">ClickHouse</span>
+                <span class="tag" style="margin-left: 0.5rem;">Skip Index</span>
+                <span class="tag" style="margin-left: 0.5rem;">Performance</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 2: AGENDA
+         =========================================== -->
+    <section class="slide" data-slide="2">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">今日议程</h2>
+            <ul class="feature-list">
+                <li class="animate-in">项目背景与数据规模</li>
+                <li class="animate-in">ClickHouse 稀疏主键索引原理</li>
+                <li class="animate-in">跳数索引（Skip Index）详解</li>
+                <li class="animate-in">与 MySQL 联合索引的对比</li>
+                <li class="animate-in">实战优化案例</li>
+                <li class="animate-in">经验总结与最佳实践</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 3: PROJECT BACKGROUND
+         =========================================== -->
+    <section class="slide" data-slide="3">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">项目背景</h2>
+            <p class="subtitle animate-in">A股股票数据爬虫系统</p>
+            <div class="stats-row">
+                <div class="stat-item animate-scale">
+                    <div class="stat-value">13.9M</div>
+                    <div class="stat-label">总记录数</div>
+                </div>
+                <div class="stat-item animate-scale">
+                    <div class="stat-value">413MB</div>
+                    <div class="stat-label">磁盘占用</div>
+                </div>
+                <div class="stat-item animate-scale">
+                    <div class="stat-value">17.7%</div>
+                    <div class="stat-label">压缩率</div>
+                </div>
+                <div class="stat-item animate-scale">
+                    <div class="stat-value">5000+</div>
+                    <div class="stat-label">股票数量</div>
+                </div>
+            </div>
+            <div class="animate-in" style="margin-top: 2rem;">
+                <div class="flow-container">
+                    <div class="flow-box">akshare</div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box">异步封装</div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box">质量校验</div>
+                    <span class="flow-arrow">→</span>
+                    <div class="flow-box">ClickHouse</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 4: QUERY PATTERNS
+         =========================================== -->
+    <section class="slide" data-slide="4">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">常见查询模式</h2>
+            <div class="grid-2" style="max-width: 1000px;">
+                <div class="card animate-left">
+                    <h3>模式一：单股票查询</h3>
+                    <div class="code-block">
+                        <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> stock_daily<br>
+                        <span class="keyword">WHERE</span> stock_code = <span class="string">'000001'</span>;
+                    </div>
+                    <p style="margin-top: 0.5rem; font-size: var(--small-size);">耗时：~90ms ⚠️</p>
+                </div>
+                <div class="card animate-right">
+                    <h3>模式二：日期范围查询</h3>
+                    <div class="code-block">
+                        <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> stock_daily<br>
+                        <span class="keyword">WHERE</span> trade_date <span class="keyword">BETWEEN</span><br>
+                        <span class="string">'2024-01-01'</span> <span class="keyword">AND</span> <span class="string">'2024-12-31'</span>;
+                    </div>
+                    <p style="margin-top: 0.5rem; font-size: var(--small-size);">耗时：~50ms ⚠️</p>
+                </div>
+                <div class="card animate-left">
+                    <h3>模式三：条件筛选</h3>
+                    <div class="code-block">
+                        <span class="keyword">SELECT</span> * <span class="keyword">FROM</span> stock_daily<br>
+                        <span class="keyword">WHERE</span> <span class="function">abs</span>(change_pct) > <span class="number">20</span>;
+                    </div>
+                    <p style="margin-top: 0.5rem; font-size: var(--small-size);">耗时：~225ms ⚠️</p>
+                </div>
+                <div class="card animate-right">
+                    <h3>模式四：年度聚合</h3>
+                    <div class="code-block">
+                        <span class="keyword">SELECT</span> toYear(trade_date), <span class="function">COUNT</span>(*)<br>
+                        <span class="keyword">FROM</span> stock_daily<br>
+                        <span class="keyword">GROUP BY</span> toYear(trade_date);
+                    </div>
+                    <p style="margin-top: 0.5rem; font-size: var(--small-size);">耗时：~600ms ⚠️</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 5: DENSE VS SPARSE
+         =========================================== -->
+    <section class="slide" data-slide="5">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">稀疏索引 vs 密集索引</h2>
+            <div class="comparison-container">
+                <div class="comparison-box animate-left">
+                    <h3 style="color: var(--magenta);">MySQL (密集索引)</h3>
+                    <div class="card" style="border-color: var(--magenta);">
+                        <div style="display: flex; flex-direction: column; gap: 2px; margin-bottom: 1rem;">
+                            <div style="display: flex; gap: 2px;">
+                                <div class="granule" style="background: rgba(255,0,255,0.2); border-color: var(--magenta);">行1</div>
+                                <div class="granule" style="background: rgba(255,0,255,0.2); border-color: var(--magenta);">行2</div>
+                                <div class="granule" style="background: rgba(255,0,255,0.2); border-color: var(--magenta);">行3</div>
+                                <div class="granule" style="background: rgba(255,0,255,0.2); border-color: var(--magenta);">行4</div>
+                            </div>
+                        </div>
+                        <p style="font-size: var(--small-size);">每行都有索引条目</p>
+                        <p style="font-size: var(--small-size); color: var(--cyan); margin-top: 0.5rem;">✅ 精确到每一行</p>
+                    </div>
+                </div>
+                <div class="vs-badge animate-scale">VS</div>
+                <div class="comparison-box animate-right">
+                    <h3 style="color: var(--cyan);">ClickHouse (稀疏索引)</h3>
+                    <div class="card" style="border-color: var(--cyan);">
+                        <div style="display: flex; flex-direction: column; gap: 2px; margin-bottom: 1rem;">
+                            <div style="display: flex; gap: 2px;">
+                                <div class="granule highlight">块1首行</div>
+                            </div>
+                            <p style="font-size: 0.6rem; color: var(--text-secondary);">...... 8192行 ......</p>
+                            <div style="display: flex; gap: 2px;">
+                                <div class="granule">块2首行</div>
+                            </div>
+                            <p style="font-size: 0.6rem; color: var(--text-secondary);">...... 8192行 ......</p>
+                            <div style="display: flex; gap: 2px;">
+                                <div class="granule">块3首行</div>
+                            </div>
+                        </div>
+                        <p style="font-size: var(--small-size);">每8192行一个索引条目</p>
+                        <p style="font-size: var(--small-size); color: var(--magenta); margin-top: 0.5rem;">⚠️ 需配合跳数索引精确定位</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 6: GRANULE VISUALIZATION
+         =========================================== -->
+    <section class="slide" data-slide="6">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">数据块（Granule）结构</h2>
+            <p class="subtitle animate-in" style="margin-bottom: 2rem;">数据按主键 (stock_code, trade_date) 排序存储</p>
+            <div class="granule-container animate-in">
+                <div style="display: flex; justify-content: space-between; width: 100%; max-width: 800px; margin-bottom: 1rem;">
+                    <span class="granule-label">Granule 1:</span>
+                    <div style="display: flex; gap: 2px; flex: 1;">
+                        <div class="granule highlight">000001<br>2024-01-02</div>
+                        <div class="granule">000001<br>2024-01-03</div>
+                        <div class="granule">...</div>
+                        <div class="granule">000005<br>2024-03-15</div>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; width: 100%; max-width: 800px; margin-bottom: 1rem;">
+                    <span class="granule-label">Granule 2:</span>
+                    <div style="display: flex; gap: 2px; flex: 1;">
+                        <div class="granule">000005<br>2024-03-18</div>
+                        <div class="granule">...</div>
+                        <div class="granule">000010<br>2024-06-20</div>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; width: 100%; max-width: 800px;">
+                    <span class="granule-label">Granule 3:</span>
+                    <div style="display: flex; gap: 2px; flex: 1;">
+                        <div class="granule">000010<br>2024-06-21</div>
+                        <div class="granule">...</div>
+                        <div class="granule">000015<br>2024-12-30</div>
+                    </div>
+                </div>
+            </div>
+            <div class="callout animate-in" style="margin-top: 2rem;">
+                <p>一只股票的数据可能分散在多个 Granule 中，这就是单股票查询慢的原因！</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 7: SKIP INDEX INTRO
+         =========================================== -->
+    <section class="slide" data-slide="7">
+        <div class="scanline"></div>
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">跳数索引（Skip Index）</h2>
+            <p class="subtitle animate-in">ClickHouse 的数据跳过机制</p>
+            <div class="flow-container animate-in" style="margin: 2rem 0;">
+                <div class="flow-box" style="border-color: var(--magenta);">
+                    <div style="font-size: var(--small-size);">原始数据</div>
+                    <div style="font-size: var(--small-size); color: var(--text-secondary);">8192行/块</div>
+                </div>
+                <span class="flow-arrow">→</span>
+                <div class="flow-box" style="border-color: var(--magenta);">
+                    <div style="font-size: var(--small-size);">跳数索引</div>
+                    <div style="font-size: var(--small-size); color: var(--text-secondary);">minmax统计</div>
+                </div>
+                <span class="flow-arrow">→</span>
+                <div class="flow-box" style="border-color: var(--magenta);">
+                    <div style="font-size: var(--small-size);">查询时</div>
+                    <div style="font-size: var(--small-size); color: var(--text-secondary);">跳过无关块</div>
+                </div>
+                <span class="flow-arrow">→</span>
+                <div class="flow-box card-glow" style="border-color: var(--cyan);">
+                    <div style="font-size: var(--small-size);">只扫描</div>
+                    <div style="font-size: var(--small-size); color: var(--cyan);">相关数据</div>
+                </div>
+            </div>
+            <div class="callout animate-in">
+                <p>在每个 Granule 内部计算统计信息，快速判断该数据块是否可能包含目标值！</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 8: SKIP INDEX TYPES
+         =========================================== -->
+    <section class="slide" data-slide="8">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">跳数索引类型</h2>
+            <div class="grid-3" style="max-width: 1000px;">
+                <div class="index-type-card animate-scale">
+                    <h4>minmax</h4>
+                    <p style="color: var(--text-secondary);">块内最大值/最小值</p>
+                    <p style="color: var(--cyan); font-size: var(--small-size); margin-top: 0.5rem;">范围查询优化</p>
+                </div>
+                <div class="index-type-card animate-scale">
+                    <h4>set(max_rows)</h4>
+                    <p style="color: var(--text-secondary);">块内所有唯一值</p>
+                    <p style="color: var(--cyan); font-size: var(--small-size); margin-top: 0.5rem;">低基数列筛选</p>
+                </div>
+                <div class="index-type-card animate-scale">
+                    <h4>Bloom filter</h4>
+                    <p style="color: var(--text-secondary);">布隆过滤器</p>
+                    <p style="color: var(--cyan); font-size: var(--small-size); margin-top: 0.5rem;">字符串包含查询</p>
+                </div>
+                <div class="index-type-card animate-scale">
+                    <h4>tokenbf_v1</h4>
+                    <p style="color: var(--text-secondary);">token布隆过滤器</p>
+                    <p style="color: var(--cyan); font-size: var(--small-size); margin-top: 0.5rem;">分词模糊匹配</p>
+                </div>
+                <div class="index-type-card animate-scale">
+                    <h4>ngrambf_v1</h4>
+                    <p style="color: var(--text-secondary);">ngram布隆过滤器</p>
+                    <p style="color: var(--cyan); font-size: var(--small-size); margin-top: 0.5rem;">前缀/后缀搜索</p>
+                </div>
+                <div class="index-type-card animate-scale">
+                    <h4>probability</h4>
+                    <p style="color: var(--text-secondary);">概率密度函数</p>
+                    <p style="color: var(--cyan); font-size: var(--small-size); margin-top: 0.5rem;">范围查询优化</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 9: SKIP INDEX WORKFLOW
+         =========================================== -->
+    <section class="slide" data-slide="9">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">跳数索引工作流程</h2>
+            <div class="code-block animate-in" style="margin-bottom: 2rem; max-width: 800px;">
+<span class="comment">-- 添加跳数索引</span>
+<span class="keyword">ALTER TABLE</span> stock_daily<br>
+&nbsp;&nbsp;<span class="function">ADD INDEX</span> idx_stock_code stock_code <span class="keyword">TYPE</span> minmax;<br><br>
+<span class="comment">-- 为历史数据生成索引</span>
+<span class="keyword">ALTER TABLE</span> stock_daily<br>
+&nbsp;&nbsp;<span class="function">MATERIALIZE INDEX</span> idx_stock_code;
+            </div>
+            <div class="flow-container animate-in" style="flex-direction: column; gap: 0.5rem;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span class="flow-box" style="flex: 1; max-width: 300px;">1. 查询 stock_code='000001'</span>
+                    <span class="flow-arrow flow-arrow-left">←</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span class="flow-box" style="flex: 1; max-width: 300px;">2. 检查 idx_stock_code</span>
+                    <span class="flow-arrow flow-arrow-left">←</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span class="flow-box" style="flex: 1; max-width: 300px;">3. 对每个 Granule：min ≤ 000001 ≤ max ?</span>
+                    <span class="flow-arrow flow-arrow-left">←</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span class="flow-box card-glow" style="flex: 1; max-width: 300px; border-color: var(--cyan);">4. 只扫描匹配的数据块</span>
+                    <span class="flow-arrow flow-arrow-left" style="color: var(--cyan);">✓</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 10: VS MYSQL
+         =========================================== -->
+    <section class="slide" data-slide="10">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">ClickHouse vs MySQL 索引对比</h2>
+            <div style="overflow-x: auto; width: 100%; max-width: 900px;">
+                <table class="animate-in" style="width: 100%; border-collapse: collapse; font-size: var(--small-size);">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--cyan);">
+                            <th style="padding: 0.8rem; text-align: left; color: var(--cyan);">特性</th>
+                            <th style="padding: 0.8rem; text-align: left; color: var(--magenta);">MySQL (InnoDB)</th>
+                            <th style="padding: 0.8rem; text-align: left; color: var(--cyan);">ClickHouse</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;">索引类型</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">密集索引 (每行都有)</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">稀疏索引 (每8192行)</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;">索引结构</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">B+Tree</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">稀疏排列 + 跳数索引</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;">主键作用</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">聚簇索引，存储行数据</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">数据按主键排序存储</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;">优化机制</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">ICP 下推</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">数据跳过 (Skip)</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 0.6rem;">设计目标</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">OLTP · 事务性</td>
+                            <td style="padding: 0.6rem; color: var(--text-secondary);">OLAP · 分析型</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 11: QUERY COMPARISON
+         =========================================== -->
+    <section class="slide" data-slide="11">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">查询场景性能对比</h2>
+            <div style="overflow-x: auto; width: 100%; max-width: 900px;">
+                <table class="animate-in" style="width: 100%; border-collapse: collapse; font-size: var(--small-size);">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--cyan);">
+                            <th style="padding: 0.8rem; text-align: left;">查询场景</th>
+                            <th style="padding: 0.8rem; text-align: left; color: var(--magenta);">MySQL</th>
+                            <th style="padding: 0.8rem; text-align: left; color: var(--cyan);">CH主键</th>
+                            <th style="padding: 0.8rem; text-align: left; color: #98c379;">CH+跳数索引</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;"><code>WHERE a=1 AND b=2</code></td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(log n)</td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(log n)</td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(log n)</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;"><code>WHERE a=1</code></td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(log n)</td>
+                            <td style="padding: 0.6rem; color: #d19a66;">⚠️ O(√n)</td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(log n)</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid rgba(0,240,255,0.1);">
+                            <td style="padding: 0.6rem;"><code>WHERE b=2</code></td>
+                            <td style="padding: 0.6rem; color: var(--magenta);">❌ 全表</td>
+                            <td style="padding: 0.6rem; color: var(--magenta);">❌ 全表</td>
+                            <td style="padding: 0.6rem; color: var(--magenta);">❌ 需跳数</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 0.6rem;"><code>GROUP BY a</code></td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(n log n)</td>
+                            <td style="padding: 0.6rem; color: #d19a66;">⚠️ O(n)</td>
+                            <td style="padding: 0.6rem; color: #98c379;">✅ O(n)</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="callout animate-in" style="margin-top: 2rem;">
+                <p>ClickHouse 主键索引是"粗略导航"，需要配合跳数索引才能精确定位！</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 12: OPTIMIZATION RESULT
+         =========================================== -->
+    <section class="slide" data-slide="12">
+        <div class="scanline"></div>
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">实战优化效果</h2>
+            <p class="subtitle animate-in">单股票查询从 90ms 降至 5ms</p>
+            <div class="grid-2 animate-in" style="max-width: 800px; margin: 2rem 0;">
+                <div class="card card-glow">
+                    <h3 style="text-align: center; color: var(--magenta);">优化前</h3>
+                    <div class="stat-value magenta" style="font-size: 3rem;">~90ms</div>
+                    <p style="text-align: center; margin-top: 1rem; color: var(--text-secondary);">扫描 1870 granules</p>
+                    <div style="margin-top: 1rem;">
+                        <div class="granule-row" style="margin-bottom: 0.3rem;">
+                            <span class="granule-label"></span>
+                            <div style="display: flex; gap: 2px; flex: 1;">
+                                <div class="granule highlight">1</div>
+                                <div class="granule">2</div>
+                                <div class="granule">3</div>
+                                <div class="granule">...</div>
+                                <div class="granule">1870</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" style="border-color: #98c379;">
+                    <h3 style="text-align: center; color: #98c379;">优化后</h3>
+                    <div class="stat-value" style="font-size: 3rem;">~5ms</div>
+                    <p style="text-align: center; margin-top: 1rem; color: var(--text-secondary);">扫描 1 granule</p>
+                    <div style="margin-top: 1rem;">
+                        <div class="granule-row" style="margin-bottom: 0.3rem;">
+                            <span class="granule-label"></span>
+                            <div style="display: flex; gap: 2px; flex: 1; justify-content: center;">
+                                <div class="granule highlight" style="background: rgba(152,195,121,0.3); border-color: #98c379;">1</div>
+                            </div>
+                        </div>
+                        <p style="text-align: center; font-size: var(--small-size); color: #98c379;">99.95% 数据块被跳过</p>
+                    </div>
+                </div>
+            </div>
+            <div class="stats-row animate-in">
+                <div class="stat-item">
+                    <div class="stat-value">18x</div>
+                    <div class="stat-label">性能提升</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value magenta">~2%</div>
+                    <div class="stat-label">存储开销</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 13: EXPLAIN ANALYSIS
+         =========================================== -->
+    <section class="slide" data-slide="13">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">查询计划分析</h2>
+            <p class="subtitle animate-in">EXPLAIN indexes = 1</p>
+            <div class="code-block animate-in" style="font-size: clamp(0.5rem, 1vw, 0.75rem); max-width: 850px;">
+<span class="keyword">EXPLAIN indexes = 1</span> <span class="keyword">SELECT</span> trade_date <span class="keyword">FROM</span> stock_daily<br>
+<span class="keyword">WHERE</span> stock_code = <span class="string">'000001'</span>;<br><br>
+<span style="color: var(--cyan);">ReadFromMergeTree</span> (stock_scraper.stock_daily)<br>
+&nbsp;&nbsp;<span style="color: var(--magenta);">PrimaryKey</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Keys: stock_code<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Condition: (stock_code <span class="keyword">in</span> [<span class="string">'000001'</span>, <span class="string">'000001'</span>])<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Parts: <span style="color: #98c379;">1/9</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Granules: <span style="color: #98c379;">1/1870</span><br>
+&nbsp;&nbsp;<span style="color: var(--magenta);">Skip</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Name: idx_stock_code<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Description: <span class="function">minmax GRANULARITY 1</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Condition: (stock_code <span class="keyword">in</span> [<span class="string">'000001'</span>, <span class="string">'000001'</span>])<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Parts: <span style="color: #98c379;">1/1</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Granules: <span style="color: #98c379;">1/1</span> <span style="color: #98c379;">← 精确锁定</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 14: BEST PRACTICES
+         =========================================== -->
+    <section class="slide" data-slide="14">
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">最佳实践</h2>
+            <div class="grid-2" style="max-width: 900px;">
+                <div class="card animate-left">
+                    <h3 style="color: #98c379;">✅ 推荐</h3>
+                    <ul class="feature-list" style="margin-top: 1rem;">
+                        <li>为高频查询列添加跳数索引</li>
+                        <li>为低基数列添加 set 索引</li>
+                        <li>定期查看索引使用情况</li>
+                        <li>物化视图优化聚合查询</li>
+                    </ul>
+                </div>
+                <div class="card animate-right">
+                    <h3 style="color: var(--magenta);">❌ 避免</h3>
+                    <ul class="feature-list" style="margin-top: 1rem;">
+                        <li>为主键已覆盖的组合查询加冗余索引</li>
+                        <li>为几乎所有列都建索引</li>
+                        <li>认为加了索引就能加速</li>
+                        <li>跳过 MATERIALIZE 步骤</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="callout animate-in" style="margin-top: 1.5rem;">
+                <p>经验法则：优先为高频查询列建索引，3-5个索引足够应对大多数场景</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===========================================
+         SLIDE 15: SUMMARY
+         =========================================== -->
+    <section class="slide" data-slide="15">
+        <div class="scanline"></div>
+        <div class="particles">
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+            <div class="particle"></div>
+        </div>
+        <div class="slide-content">
+            <h2 class="animate-in">总结</h2>
+            <div class="stats-row animate-in" style="margin: 2rem 0;">
+                <div class="stat-item animate-scale">
+                    <div class="stat-value">18x</div>
+                    <div class="stat-label">性能提升</div>
+                </div>
+                <div class="stat-item animate-scale">
+                    <div class="stat-value magenta">~2%</div>
+                    <div class="stat-label">存储开销</div>
+                </div>
+                <div class="stat-item animate-scale">
+                    <div class="stat-value">99.95%</div>
+                    <div class="stat-label">数据块跳过率</div>
+                </div>
+            </div>
+            <ul class="feature-list animate-in" style="max-width: 600px;">
+                <li>ClickHouse 主键是稀疏索引，不是传统联合索引</li>
+                <li>跳数索引在 Granule 内部统计，快速跳过无关数据</li>
+                <li>添加后需 MATERIALIZE 才会对历史数据生效</li>
+                <li>针对高频查询列添加，避免滥用</li>
+            </ul>
+            <p class="animate-in" style="margin-top: 2rem; color: var(--cyan); font-size: var(--h3-size);">
+                谢谢！
+            </p>
+        </div>
+    </section>
+
+    <script>
+        // ===========================================
+        // PRESENTATION CONTROLLER
+        // ===========================================
+        class PresentationController {
+            constructor() {
+                this.slides = document.querySelectorAll('.slide');
+                this.totalSlides = this.slides.length;
+                this.currentSlide = 0;
+                this.isAnimating = false;
+
+                this.init();
+            }
+
+            init() {
+                this.createNavDots();
+                this.bindEvents();
+                this.updateSlide(0);
+                this.observeSlides();
+            }
+
+            createNavDots() {
+                const navDots = document.getElementById('navDots');
+                this.slides.forEach((_, index) => {
+                    const dot = document.createElement('div');
+                    dot.className = 'nav-dot' + (index === 0 ? ' active' : '');
+                    dot.addEventListener('click', () => this.goToSlide(index));
+                    navDots.appendChild(dot);
+                });
+            }
+
+            bindEvents() {
+                // Keyboard navigation
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === ' ') {
+                        e.preventDefault();
+                        this.nextSlide();
+                    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        this.prevSlide();
+                    } else if (e.key === 'Home') {
+                        e.preventDefault();
+                        this.goToSlide(0);
+                    } else if (e.key === 'End') {
+                        e.preventDefault();
+                        this.goToSlide(this.totalSlides - 1);
+                    }
+                });
+
+                // Touch/swipe navigation
+                let touchStartY = 0;
+                document.addEventListener('touchstart', (e) => {
+                    touchStartY = e.touches[0].clientY;
+                });
+
+                document.addEventListener('touchend', (e) => {
+                    const touchEndY = e.changedTouches[0].clientY;
+                    const diff = touchStartY - touchEndY;
+                    if (Math.abs(diff) > 50) {
+                        if (diff > 0) {
+                            this.nextSlide();
+                        } else {
+                            this.prevSlide();
+                        }
+                    }
+                });
+
+                // Mouse wheel navigation
+                let wheelTimeout;
+                document.addEventListener('wheel', (e) => {
+                    if (this.isAnimating) return;
+                    clearTimeout(wheelTimeout);
+                    wheelTimeout = setTimeout(() => {
+                        if (e.deltaY > 0) {
+                            this.nextSlide();
+                        } else if (e.deltaY < 0) {
+                            this.prevSlide();
+                        }
+                    }, 50);
+                });
+            }
+
+            observeSlides() {
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            const slideIndex = parseInt(entry.target.dataset.slide) - 1;
+                            this.currentSlide = slideIndex;
+                            this.updateUI();
+                            entry.target.classList.add('active');
+                        }
+                    });
+                }, { threshold: 0.5 });
+
+                this.slides.forEach(slide => observer.observe(slide));
+            }
+
+            updateUI() {
+                // Update counter
+                document.getElementById('currentSlide').textContent = this.currentSlide + 1;
+                document.getElementById('totalSlides').textContent = this.totalSlides;
+
+                // Update progress bar
+                const progress = ((this.currentSlide + 1) / this.totalSlides) * 100;
+                document.getElementById('progressBar').style.width = progress + '%';
+
+                // Update nav dots
+                document.querySelectorAll('.nav-dot').forEach((dot, index) => {
+                    dot.classList.toggle('active', index === this.currentSlide);
+                });
+            }
+
+            goToSlide(index) {
+                if (index < 0 || index >= this.totalSlides || this.isAnimating) return;
+                this.isAnimating = true;
+
+                this.slides[index].scrollIntoView({ behavior: 'smooth' });
+
+                setTimeout(() => {
+                    this.isAnimating = false;
+                }, 800);
+            }
+
+            nextSlide() {
+                if (this.currentSlide < this.totalSlides - 1) {
+                    this.goToSlide(this.currentSlide + 1);
+                }
+            }
+
+            prevSlide() {
+                if (this.currentSlide > 0) {
+                    this.goToSlide(this.currentSlide - 1);
+                }
+            }
+
+            updateSlide(index) {
+                this.currentSlide = index;
+                this.updateUI();
+            }
+        }
+
+        // Initialize presentation
+        document.addEventListener('DOMContentLoaded', () => {
+            new PresentationController();
+        });
+    </script>
+</body>
+</html>
