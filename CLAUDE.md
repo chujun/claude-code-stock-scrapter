@@ -36,7 +36,17 @@ python scripts/small_batch_sync.py
 
 # 全量同步（生产环境）
 python scripts/full_batch_sync.py
+
+# 指定数量测试同步
+python scripts/full_batch_sync.py --limit 10 --offset 0 --days 30 --strategy skip
 ```
+
+## 日志
+
+日志输出到 `/data/logs/stock-scraper/` 目录：
+- `sync.log` - 同步进度日志（滚动）
+- `detail.log` - API请求/响应和每日期同步详情（滚动）
+- 告警输出到 `/data/logs/alerts.log`
 
 ## 架构
 
@@ -106,6 +116,10 @@ python scripts/full_batch_sync.py --strategy overwrite
 ### 质量校验
 
 QualityService对涨跌幅进行校验，异常值标记为warn/error，默认阈值为±10%(ST股±20%)。
+
+### 北交所股票
+
+北交所股票代码以8开头，同步时会自动从新浪财经获取数据。
 
 ### 数据库初始化
 
