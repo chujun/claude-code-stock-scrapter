@@ -1343,26 +1343,73 @@
         <div class="particles">
             <div class="particle"></div>
             <div class="particle"></div>
-            <div class="particle"></div>
         </div>
-        <div class="slide-content">
-            <h2 class="animate-in">查询计划分析</h2>
-            <p class="subtitle animate-in">EXPLAIN indexes = 1</p>
-            <div class="code-block animate-in" style="font-size: clamp(0.5rem, 1vw, 0.75rem); max-width: 850px;">
-<span class="keyword">EXPLAIN indexes = 1</span> <span class="keyword">SELECT</span> trade_date <span class="keyword">FROM</span> stock_daily<br>
-<span class="keyword">WHERE</span> stock_code = <span class="string">'000001'</span>;<br><br>
+        <div class="slide-content" style="gap: 1rem;">
+            <h2 class="animate-in">查询计划解读</h2>
+            <p class="subtitle animate-in" style="margin-bottom: 0.5rem;">EXPLAIN indexes = 1</p>
+            <div class="comparison-container animate-in" style="gap: 1.5rem; max-width: 1100px;">
+                <!-- 左侧：查询计划 -->
+                <div class="comparison-box" style="flex: 1.2; min-width: 280px;">
+                    <div class="code-block" style="font-size: clamp(0.5rem, 0.9vw, 0.7rem);">
 <span style="color: var(--cyan);">ReadFromMergeTree</span> (stock_scraper.stock_daily)<br>
 &nbsp;&nbsp;<span style="color: var(--magenta);">PrimaryKey</span><br>
 &nbsp;&nbsp;&nbsp;&nbsp;Keys: stock_code<br>
-&nbsp;&nbsp;&nbsp;&nbsp;Condition: (stock_code <span class="keyword">in</span> [<span class="string">'000001'</span>, <span class="string">'000001'</span>])<br>
-&nbsp;&nbsp;&nbsp;&nbsp;Parts: <span style="color: #98c379;">1/9</span><br>
-&nbsp;&nbsp;&nbsp;&nbsp;Granules: <span style="color: #98c379;">1/1870</span><br>
-&nbsp;&nbsp;<span style="color: var(--magenta);">Skip</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Parts: <span style="color: #98c379;">1</span>/9 &nbsp; <span style="color: #d19a66;">→</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Granules: <span style="color: #98c379;">1</span>/1870<br>
+&nbsp;&nbsp;<span style="color: var(--magenta);">Skip (跳数索引)</span><br>
 &nbsp;&nbsp;&nbsp;&nbsp;Name: idx_stock_code<br>
-&nbsp;&nbsp;&nbsp;&nbsp;Description: <span class="function">minmax GRANULARITY 1</span><br>
-&nbsp;&nbsp;&nbsp;&nbsp;Condition: (stock_code <span class="keyword">in</span> [<span class="string">'000001'</span>, <span class="string">'000001'</span>])<br>
-&nbsp;&nbsp;&nbsp;&nbsp;Parts: <span style="color: #98c379;">1/1</span><br>
-&nbsp;&nbsp;&nbsp;&nbsp;Granules: <span style="color: #98c379;">1/1</span> <span style="color: #98c379;">← 精确锁定</span>
+&nbsp;&nbsp;&nbsp;&nbsp;Parts: <span style="color: #98c379;">1</span>/1 &nbsp; <span style="color: #98c379;">✓</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;Granules: <span style="color: #98c379;">1</span>/1 &nbsp; <span style="color: #98c379;">✓ 精确锁定</span>
+                    </div>
+                </div>
+                <!-- 右侧：说明 -->
+                <div class="comparison-box" style="flex: 1.3; min-width: 280px;">
+                    <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+                        <div class="card" style="padding: 0.6rem 0.8rem; border-color: var(--cyan);">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="tag" style="font-size: 0.6rem; padding: 0.15em 0.4em;">PrimaryKey</span>
+                                <span style="color: var(--text-secondary); font-size: var(--small-size);">主键索引阶段</span>
+                            </div>
+                            <div style="margin-top: 0.4rem; font-size: var(--small-size); color: var(--text-secondary);">
+                                <span style="color: var(--cyan);">Parts: 1/9</span> - 跳过8个Part，只扫描1个<br>
+                                <span style="color: var(--cyan);">Granules: 1/1870</span> - 初步定位数据块
+                            </div>
+                        </div>
+                        <div class="card" style="padding: 0.6rem 0.8rem; border-color: var(--magenta);">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="tag" style="font-size: 0.6rem; padding: 0.15em 0.4em; border-color: var(--magenta); color: var(--magenta);">Skip</span>
+                                <span style="color: var(--text-secondary); font-size: var(--small-size);">跳数索引阶段</span>
+                            </div>
+                            <div style="margin-top: 0.4rem; font-size: var(--small-size); color: var(--text-secondary);">
+                                <span style="color: #98c379;">Granules: 1/1</span> - 精确锁定到1个Granule<br>
+                                <span style="color: #98c379;">✓ idx_stock_code 生效</span>
+                            </div>
+                        </div>
+                        <div class="callout" style="padding: 0.6rem 1rem; margin: 0;">
+                            <p style="font-size: var(--small-size);">
+                                <span style="color: var(--cyan);">9</span> 个Part × <span style="color: var(--cyan);">1870</span> 个Granule<br>
+                                最终只扫描 <span style="color: #98c379;">1</span> 个Granule
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 底部：Parts vs Granules 概念说明 -->
+            <div class="flow-container animate-in" style="margin-top: 0.8rem; gap: 1.5rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <div class="flow-box" style="padding: 0.4rem 0.8rem; min-width: 80px; border-color: var(--cyan);">
+                        <div style="font-size: var(--small-size); color: var(--cyan);">Part</div>
+                        <div style="font-size: 0.55rem; color: var(--text-secondary);">数据目录</div>
+                    </div>
+                    <span style="font-size: var(--small-size); color: var(--text-secondary);">= 物理存储单元，我们的表有9个</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <div class="flow-box" style="padding: 0.4rem 0.8rem; min-width: 80px; border-color: var(--magenta);">
+                        <div style="font-size: var(--small-size); color: var(--magenta);">Granule</div>
+                        <div style="font-size: 0.55rem; color: var(--text-secondary);">~8192行</div>
+                    </div>
+                    <span style="font-size: var(--small-size); color: var(--text-secondary);">= 数据块，总共1870个</span>
+                </div>
             </div>
         </div>
     </section>
