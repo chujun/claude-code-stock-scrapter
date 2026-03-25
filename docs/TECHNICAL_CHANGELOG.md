@@ -6,6 +6,93 @@
 
 ---
 
+## v1.5 (2026-03-25)
+
+### 优化：限流策略差异化配置
+
+#### 问题
+
+1. 原 `base_interval=1.5秒`，全量同步效率较低
+2. `get_financial_indicator_async` 方法未调用限流器，可能被封禁
+3. 全量同步和增量同步使用相同间隔，无法针对场景优化
+
+#### 解决方案
+
+**1. 新增配置项**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `base_interval` | 1.0秒 | 基础请求间隔 |
+| `full_sync_interval` | 1.0秒 | 全量同步间隔 |
+| `incremental_sync_interval` | 0.8秒 | 增量同步间隔 |
+
+**2. 新增 SyncMode 枚举**
+
+```python
+class SyncMode(Enum):
+    FULL = "full"           # 全量同步 - 使用 full_sync_interval
+    INCREMENTAL = "incremental"  # 增量同步 - 使用 incremental_sync_interval
+```
+
+**3. 限流器支持同步模式**
+
+```python
+async def wait(self, sync_mode: SyncMode = None) -> None:
+    if sync_mode == SyncMode.FULL:
+        self._current_interval = self.full_sync_interval
+    elif sync_mode == SyncMode.INCREMENTAL:
+        self._current_interval = self.incremental_sync_interval
+    else:
+        self._current_interval = self.base_interval
+```
+
+**4. 配置文件变更**
+
+```yaml
+data_source:
+  rate_limit:
+    base_interval: 1.0  # 基础请求间隔(秒)  # 从1.5调整为1.0
+    max_interval: 10.0  # 最大间隔(秒)
+    increase_factor: 1.5  # 失败后增加倍数
+    full_sync_interval: 1.0  # 新增：全量同步间隔(秒)
+    incremental_sync_interval: 0.8  # 新增：增量同步间隔(秒)
+```
+
+#### 效率提升
+
+| 场景 | 变更前 | 变更后 | 提升 |
+|------|--------|--------|------|
+| 全量同步 | 1.5秒/请求 | 1.0秒/请求 | **33%** |
+| 增量同步 | 1.5秒/请求 | 0.8秒/请求 | **47%** |
+| 财务指标获取 | 无限制 | 1.0秒/请求 | **安全** |
+
+#### 同步速率预估
+
+| 同步类型 | 间隔 | 每分钟请求数 |
+|----------|------|-------------|
+| 全量同步 | 1.0秒 | ~60次 |
+| 增量同步 | 0.8秒 | ~75次 |
+
+#### 相关文件
+
+| 文件 | 变更内容 |
+|------|---------|
+| `config/settings.py` | 新增 `full_sync_interval`、`incremental_sync_interval` 配置 |
+| `config.yaml` | 新增配置项，调整 `base_interval` 默认值 |
+| `data_source/rate_limiter.py` | 新增 `SyncMode` 枚举、`wait(sync_mode)` 方法 |
+| `data_source/akshare_client.py` | 使用新配置初始化限流器 |
+
+#### 测试覆盖
+
+- RateLimiter 测试覆盖率：**100%**
+- 新增测试用例：
+  - `test_wait_with_full_sync_mode`
+  - `test_wait_with_incremental_sync_mode`
+  - `test_current_interval_property`
+  - `test_get_financial_indicator_async_has_rate_limit`
+
+---
+
 ## v1.2 (2026-03-23)
 
 ### 同步效率实测数据

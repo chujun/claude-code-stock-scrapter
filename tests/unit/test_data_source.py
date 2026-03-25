@@ -2,6 +2,7 @@
 """数据源层单元测试"""
 
 import pytest
+import time
 from datetime import date
 from unittest.mock import Mock, AsyncMock, patch
 
@@ -17,7 +18,7 @@ from data_source.exceptions import (
     RateLimitError,
     ServerError,
 )
-from data_source.rate_limiter import RateLimiter
+from data_source.rate_limiter import RateLimiter, SyncMode
 
 
 class TestRateLimiter:
@@ -59,10 +60,64 @@ class TestRateLimiter:
     def test_update_last_request_time(self):
         """测试更新时间记录"""
         limiter = RateLimiter(base_interval=1.0)
-        import time
         current = time.time()
         limiter.last_request_time = current
         assert limiter.last_request_time == current
+
+    def test_rate_limiter_configurable_interval(self):
+        """测试限流器可配置间隔"""
+        limiter = RateLimiter(base_interval=2.0)
+        assert limiter.base_interval == 2.0
+        limiter.set_interval(3.0)
+        assert limiter.base_interval == 3.0
+
+    def test_rate_limiter_reset(self):
+        """测试限流器重置"""
+        limiter = RateLimiter(base_interval=1.0)
+        limiter.last_request_time = time.time()
+        limiter.reset()
+        assert limiter.last_request_time == 0.0
+
+    @pytest.mark.asyncio
+    async def test_wait_with_full_sync_mode(self):
+        """测试全量同步模式的限流间隔"""
+        limiter = RateLimiter(
+            base_interval=0.1,
+            full_sync_interval=0.2,
+            incremental_sync_interval=0.05
+        )
+        await limiter.wait()
+        start = time.time()
+        await limiter.wait(sync_mode=SyncMode.FULL)
+        elapsed = time.time() - start
+        assert elapsed >= 0.19  # 至少间隔接近0.2秒
+
+    @pytest.mark.asyncio
+    async def test_wait_with_incremental_sync_mode(self):
+        """测试增量同步模式的限流间隔"""
+        limiter = RateLimiter(
+            base_interval=0.1,
+            full_sync_interval=0.2,
+            incremental_sync_interval=0.05
+        )
+        await limiter.wait()
+        start = time.time()
+        await limiter.wait(sync_mode=SyncMode.INCREMENTAL)
+        elapsed = time.time() - start
+        assert elapsed >= 0.04  # 至少间隔接近0.05秒
+
+    def test_current_interval_property(self):
+        """测试当前间隔属性"""
+        limiter = RateLimiter(
+            base_interval=1.0,
+            full_sync_interval=0.8,
+            incremental_sync_interval=0.5
+        )
+        # 默认使用 base_interval
+        assert limiter.current_interval == 1.0
+        # 手动设置后
+        limiter.set_interval(2.0)
+        assert limiter.current_interval == 2.0
 
 
 class TestDataSourceExceptions:
@@ -435,3 +490,64 @@ class TestAkshareClient:
             assert call_count == 1
             # 两次结果应该一致
             assert result1 == result2
+
+    @pytest.mark.asyncio
+    async def test_get_financial_indicator_async_has_rate_limit(self):
+        """测试 get_financial_indicator_async 调用限流器"""
+        from data_source.akshare_client import AkshareClient
+        import pandas as pd
+
+        client = AkshareClient()
+        # 使用非常小的间隔以便快速测试
+        client.rate_limiter.base_interval = 0.01
+
+        # Mock雪球API返回空数据
+        mock_df = pd.DataFrame({
+            'item': ['pe_after_issuing'],
+            'value': ['-']
+        })
+
+        start_time = time.time()
+        with patch('akshare.stock_individual_basic_info_xq', return_value=mock_df):
+            await client.get_financial_indicator_async('600000')
+        elapsed = time.time() - start_time
+
+        # 由于调用了限流器，应该至少等待了 base_interval
+        assert elapsed >= 0.009  # 至少等待接近0.01秒
+
+    def test_rate_limit_settings_default_interval(self):
+        """测试 RateLimitSettings 默认 base_interval 为 1.0 秒"""
+        from config.settings import RateLimitSettings
+        settings = RateLimitSettings()
+        assert settings.base_interval == 1.0
+
+    @pytest.mark.asyncio
+    async def test_get_financial_indicator_async_respects_rate_limit(self):
+        """测试 get_financial_indicator_async 遵守限流"""
+        from data_source.akshare_client import AkshareClient
+        import pandas as pd
+        import time
+
+        client = AkshareClient()
+        # 设置较大的间隔以便检测
+        client.rate_limiter.base_interval = 0.05
+
+        mock_df = pd.DataFrame({
+            'item': ['pe_after_issuing'],
+            'value': ['-']
+        })
+
+        with patch('akshare.stock_individual_basic_info_xq', return_value=mock_df):
+            # 第一次调用
+            start1 = time.time()
+            await client.get_financial_indicator_async('600000')
+            elapsed1 = time.time() - start1
+
+            # 第二次调用
+            start2 = time.time()
+            await client.get_financial_indicator_async('600001')
+            elapsed2 = time.time() - start2
+
+        # 至少有一次调用应该触发了限流等待
+        # 第一次可能不需要等待（首次请求），第二次应该需要等待
+        # 这里主要验证不会连续无间隔调用

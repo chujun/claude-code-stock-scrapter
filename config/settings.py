@@ -25,9 +25,11 @@ class ClickHouseSettings(BaseSettings):
 
 class RateLimitSettings(BaseSettings):
     """请求限流配置"""
-    base_interval: float = 1.5  # 基础请求间隔(秒)
+    base_interval: float = 1.0  # 基础请求间隔(秒)
     max_interval: float = 10.0  # 最大间隔(秒)
     increase_factor: float = 1.5  # 失败后增加倍数
+    full_sync_interval: float = 1.0  # 全量同步间隔(秒)
+    incremental_sync_interval: float = 0.8  # 增量同步间隔(秒)
 
 
 class DataSourceSettings(BaseSettings):

@@ -40,7 +40,7 @@ from data_source.exceptions import (
     NoDataError,
     DataError,
 )
-from data_source.rate_limiter import RateLimiter
+from data_source.rate_limiter import RateLimiter, SyncMode
 from models.stock_info import StockInfo
 from models.stock_daily import StockDaily
 from models.daily_index import DailyIndex
@@ -60,8 +60,11 @@ class AkshareClient(BaseDataSource):
             settings: 配置对象，默认从配置文件加载
         """
         self.settings = settings or get_settings().data_source
+        rate_config = self.settings.rate_limit
         self.rate_limiter = RateLimiter(
-            base_interval=self.settings.rate_limit.base_interval
+            base_interval=rate_config.base_interval,
+            full_sync_interval=rate_config.full_sync_interval,
+            incremental_sync_interval=rate_config.incremental_sync_interval
         )
         # 交易日历缓存（类级别，所有实例共享）
         # 结构: (cached_dates_set, cache_date)

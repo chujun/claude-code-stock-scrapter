@@ -13,9 +13,11 @@ clickhouse:
 data_source:
   name: "akshare"
   rate_limit:
-    base_interval: 1.5  # 基础请求间隔(秒)
+    base_interval: 1.0  # 基础请求间隔(秒)
     max_interval: 10.0  # 最大间隔(秒)
     increase_factor: 1.5  # 失败后增加倍数
+    full_sync_interval: 1.0  # 全量同步间隔(秒)
+    incremental_sync_interval: 0.8  # 增量同步间隔(秒)
 
 sync:
   batch_size: 1024  # 批量写入大小
