@@ -18,7 +18,7 @@ VALID_TABLE_NAME_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 # 允许的表名列表（白名单）
 ALLOWED_TABLES = {
     'stock_info', 'stock_daily', 'sync_status', 'sync_error',
-    'sync_report', 'daily_index', 'stock_split'
+    'sync_report', 'daily_index', 'stock_split', 'stock_financial_risk'
 }
 
 

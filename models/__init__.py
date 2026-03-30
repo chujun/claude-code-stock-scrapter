@@ -9,6 +9,7 @@ from models.sync_error import SyncError
 from models.sync_report import SyncReport
 from models.daily_index import DailyIndex
 from models.stock_split import StockSplit
+from models.stock_financial_risk import StockFinancialRisk
 
 __all__ = [
     "BaseModel",
@@ -19,4 +20,5 @@ __all__ = [
     "SyncReport",
     "DailyIndex",
     "StockSplit",
+    "StockFinancialRisk",
 ]

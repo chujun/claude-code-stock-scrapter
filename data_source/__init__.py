@@ -3,6 +3,7 @@
 
 from data_source.base import BaseDataSource
 from data_source.akshare_client import AkshareClient
+from data_source.ths_client import THSClient
 from data_source.rate_limiter import RateLimiter
 from data_source.exceptions import (
     NetworkError,
@@ -16,6 +17,7 @@ from data_source.exceptions import (
 __all__ = [
     "BaseDataSource",
     "AkshareClient",
+    "THSClient",
     "RateLimiter",
     "NetworkError",
     "DataError",
