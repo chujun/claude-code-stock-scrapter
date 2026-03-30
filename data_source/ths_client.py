@@ -11,9 +11,8 @@ import time
 from datetime import date, datetime
 from typing import List, Optional
 
-from playwright.async_api import async_playwright, Browser, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 
-from data_source.base import BaseDataSource
 from data_source.exceptions import NetworkError, NoDataError, DataError
 from data_source.rate_limiter import RateLimiter
 from models.stock_financial_risk import StockFinancialRisk
@@ -25,11 +24,10 @@ logger = logging.getLogger(__name__)
 class THSRiskPageSource:
     """同花顺股票财务风险页面数据源"""
 
-    # 同花顺股票风险页面URL模板
-    RISK_URL_TEMPLATE = "https://stockpage.10jqka.com.cn/{stock_code}/risk/"
+    # 同花顺股票风险页面URL模板 - 使用经过验证的URL
+    RISK_URL_TEMPLATE = "https://basic.10jqka.com.cn/{stock_code}/"
 
     # 风险等级CSS选择器（基于同花顺页面结构）
-    # 同花顺风险评估分为：无风险(0)、低风险(1)、中等风险(2)、高风险(3)
     RISK_TABLE_SELECTOR = "table.risk-table, table.risk-eval"
     RISK_ROW_SELECTOR = "table.risk-table tr, table.risk-eval tr"
 
@@ -44,17 +42,21 @@ class THSRiskPageSource:
     DATE_SELECTOR = ".risk-date, .update-date, [class*='risk-date']"
 
 
-class THSClient(BaseDataSource):
+class THSClient:
     """同花顺财务风险数据爬虫
 
     使用Playwright异步爬取同花顺网站的财务风险评估数据
+
+    注意：同花顺网站有严格的反爬虫机制，如果频繁访问可能会被封禁
     """
 
-    # 默认User-Agent
-    DEFAULT_USER_AGENT = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    # 默认User-Agent列表，模拟真实浏览器
+    USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    ]
 
     def __init__(
         self,
@@ -62,7 +64,8 @@ class THSClient(BaseDataSource):
         timeout: int = 30000,
         slow_mo: int = 100,
         browser_type: str = "chromium",
-        rate_limit_interval: float = 2.0
+        rate_limit_interval: float = 3.0,
+        use_proxy: bool = False
     ):
         """初始化同花顺爬虫
 
@@ -72,12 +75,15 @@ class THSClient(BaseDataSource):
             slow_mo: 操作间隔（毫秒），用于调试
             browser_type: 浏览器类型，可选 'chromium', 'firefox', 'webkit'
             rate_limit_interval: 请求间隔（秒），防止被封禁
+            use_proxy: 是否使用代理
         """
         self.headless = headless
         self.timeout = timeout
         self.slow_mo = slow_mo
         self.browser_type = browser_type
+        self.use_proxy = use_proxy
         self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
         self._playwright = None
         self._rate_limiter = RateLimiter(
             base_interval=rate_limit_interval,
@@ -85,33 +91,74 @@ class THSClient(BaseDataSource):
             incremental_sync_interval=rate_limit_interval
         )
         self._last_request_time = 0.0
+        self._request_count = 0
+
+    async def _create_context(self) -> BrowserContext:
+        """创建浏览器上下文，带有反反爬虫措施"""
+        if self._context is None:
+            # 选择随机User-Agent
+            import random
+            user_agent = random.choice(self.USER_AGENTS)
+
+            self._context = await self._browser.new_context(
+                user_agent=user_agent,
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                ignore_https_errors=True,
+            )
+
+            # 阻止webdriver检测
+            await self._context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['zh-CN', 'zh', 'en-US', 'en']
+                });
+                window.chrome = { runtime: {} };
+            """)
+
+        return self._context
 
     async def _get_browser(self) -> Browser:
         """获取或创建浏览器实例"""
         if self._browser is None:
             self._playwright = await async_playwright().start()
             browser_launcher = getattr(self._playwright, self.browser_type)
+
+            launch_args = [
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-infobars',
+                '--disable-extensions',
+            ]
+
             self._browser = await browser_launcher.launch(
                 headless=self.headless,
-                slow_mo=self.slow_mo
+                slow_mo=self.slow_mo,
+                args=launch_args
             )
         return self._browser
 
     async def _create_page(self) -> Page:
         """创建新页面"""
         browser = await self._get_browser()
-        page = await browser.new_page()
+        context = await self._create_context()
+        page = await context.new_page()
         page.set_default_timeout(self.timeout)
-        # 设置请求头，防止被检测为爬虫
-        await page.set_extra_http_headers({
-            "User-Agent": self.DEFAULT_USER_AGENT,
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        })
         return page
 
     async def close(self) -> None:
         """关闭浏览器"""
+        if self._context:
+            await self._context.close()
+            self._context = None
         if self._browser:
             await self._browser.close()
             self._browser = None
@@ -147,6 +194,7 @@ class THSClient(BaseDataSource):
         if elapsed < self._rate_limiter.base_interval:
             await asyncio.sleep(self._rate_limiter.base_interval - elapsed)
         self._last_request_time = time.time()
+        self._request_count += 1
 
         url = THSRiskPageSource.RISK_URL_TEMPLATE.format(stock_code=symbol)
 
@@ -155,7 +203,13 @@ class THSClient(BaseDataSource):
             page = await self._create_page()
 
             logger.debug(f"Fetching risk data from {url}")
-            response = await page.goto(url, wait_until="networkidle")
+
+            # 先访问主页建立会话
+            await page.goto("https://www.10jqka.com.cn/", wait_until="domcontentloaded")
+            await asyncio.sleep(1)
+
+            # 然后访问目标页面
+            response = await page.goto(url, wait_until="networkidle", timeout=60000)
 
             if response is None or response.status >= 400:
                 raise NetworkError(
@@ -164,6 +218,13 @@ class THSClient(BaseDataSource):
 
             # 等待页面加载完成
             await page.wait_for_load_state("domcontentloaded")
+            # 额外等待JS渲染
+            await asyncio.sleep(2)
+
+            # 获取页面内容用于调试
+            content = await page.content()
+            if len(content) < 1000:
+                logger.warning(f"Page content too short ({len(content)} chars) for {stock_code}, may be blocked")
 
             # 尝试提取风险数据
             risk_data = await self._extract_risk_data(page, stock_code)
